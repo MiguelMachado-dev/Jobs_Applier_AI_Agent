@@ -11,18 +11,19 @@ import yaml
 
 CONFIG_FILE = "aihawk.yaml"
 KEY_FILE = "key"
-DEFAULT_BASE_URL = "https://api.orcarouter.ai/v1"
+DEFAULT_BASE_URL = "https://api.openai.com/v1"
 # The variable that holds the model key, unless the settings name another. The browser is given no variable that holds a key.
-KEY_ENV = "ORCAROUTER_API_KEY"
-# Where a person gets a key. A referral link, as the README says: AIHawk gets a share of what is spent through it.
-KEY_URL = "https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7"
-# Fills the forms and reads their screenshots. Chosen over z-ai/glm-5.3-flash, which was slower and dearer on the same forms.
-DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
-# For the plan and the other short calls of a search. deepseek-v4.1-flash did not keep the plan's nested schema, and
-# z-ai/glm-5.3-flash was too slow for a search.
-DEFAULT_QUICK_MODEL = "google/gemini-3.5-flash"
+KEY_ENV = "OPENAI_API_KEY"
+# Where a person gets a key.
+KEY_URL = "https://platform.openai.com/api-keys"
+# Fills the forms and reads their screenshots.
+DEFAULT_MODEL = "gpt-6.1-sol"
+# For the plan and the other short calls of a search.
+DEFAULT_QUICK_MODEL = "gpt-6.1-sol"
 # Answers, for each posting, whether it is in line with the candidate, and how sure it is: that is the posting's score.
-DEFAULT_DECISION_MODEL = "typesafe/jev-1.14"
+DEFAULT_DECISION_MODEL = "gpt-6.1-sol"
+# How hard every model call thinks. A model set in aihawk.yaml must accept this value.
+REASONING_EFFORT = "high"
 # The Hugging Face dataset the pipeline publishes to. It was GitHub's releases until 2026-11-08: see pipeline/publish.py.
 DEFAULT_DATABASE = "https://huggingface.co/datasets/feder-cr/jobs/resolve/main/library/manifest.json"
 # The manifest of the layout before 2026-11-09, which a settings file may still name: it means the default now.

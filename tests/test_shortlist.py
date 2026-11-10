@@ -1,4 +1,4 @@
-"""Jev's verdict: the request's exact shape, the one question, the score from its certainty, the batches and their limits, the client's retries and the failed verdicts. No network: a scripted endpoint stands in."""
+"""The model's verdict: the request's shape, the one question, the score from its certainty, one posting to a request, the client's retries and the failed verdicts. No network: a scripted endpoint stands in."""
 
 from __future__ import annotations
 
@@ -13,9 +13,9 @@ import httpx
 import pytest
 from openai import AsyncOpenAI
 
-from aihawk.config import DEFAULT_BASE_URL, load_config
+from aihawk.config import DEFAULT_BASE_URL, DEFAULT_DECISION_MODEL, load_config
 from aihawk.database import Job
-from aihawk.shortlist import DESCRIPTION_CHARS, MAX_CHARS, MAX_POSTINGS, fits, question, score
+from aihawk.shortlist import CONCURRENT, DESCRIPTION_CHARS, fits, question, score
 
 KEY = "sk-test-key"
 JOB = Job("g:a:1", "Acme", "Python Engineer", "Rome", "u", "a", "Build Python services.")
@@ -27,17 +27,27 @@ def client_with(handler: Any) -> AsyncOpenAI:
     return AsyncOpenAI(base_url=DEFAULT_BASE_URL, api_key=KEY, max_retries=5, http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
 
+def completion(content: Any) -> httpx.Response:
+    """A chat completion whose message says `content`, as JSON."""
+    message = {"role": "assistant", "content": json.dumps(content)}
+    return httpx.Response(200, json={"id": "c", "object": "chat.completion", "created": 0, "model": "m", "choices": [{"index": 0, "finish_reason": "stop", "message": message}]})
+
+
+def sent(request: httpx.Request) -> dict[str, Any]:
+    """What the request's user message holds: the question, the CV and the postings."""
+    return json.loads(json.loads(request.content)["messages"][1]["content"])
+
+
 def answering(certainty: float, seen: list[httpx.Request]) -> Any:
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        body = json.loads(request.content)
-        return httpx.Response(200, json={"answers": {name: {"type": "noul", "noul": certainty} for name in body["questions"]}})
+        return completion({"fit_probability": certainty})
 
     return handler
 
 
 def run(client: AsyncOpenAI, jobs: list[Job], cv: str = "cv", why: Callable[[str], None] = lambda reason: None) -> list[float | None]:
-    return asyncio.run(fits(client, "typesafe/jev-1.14", cv, jobs, ASKED, lambda done: None, why))
+    return asyncio.run(fits(client, DEFAULT_DECISION_MODEL, cv, jobs, ASKED, lambda done: None, why))
 
 
 def postings(count: int, description: str = "") -> list[Job]:
@@ -45,18 +55,18 @@ def postings(count: int, description: str = "") -> list[Job]:
     return [Job(f"j{number:03d}", "Firm", f"Engineer {number}", "Rome", "u", "a", description) for number in range(count)]
 
 
-def test_the_request_goes_to_the_decision_endpoint_with_the_key_and_one_question() -> None:
+def test_the_request_goes_to_chat_completions_with_the_key_the_question_and_a_strict_schema() -> None:
     seen: list[httpx.Request] = []
     assert run(client_with(answering(0.8, seen)), [JOB]) == [0.8]
     (request,) = seen
-    assert str(request.url) == "https://api.orcarouter.ai/v1/systemone"
-    assert request.method == "POST"
+    assert str(request.url) == "https://api.openai.com/v1/chat/completions"
     assert request.headers["authorization"] == "Bearer " + KEY
     body = json.loads(request.content)
-    assert body["model"] == "typesafe/jev-1.14"
-    assert body["state"]["candidate_cv"] == "cv"
-    assert body["state"]["job_postings"] == {"p00": "Python Engineer at Acme. Location: Rome\n\nBuild Python services."}
-    assert body["questions"] == {"p00_fit": {"type": "noul", "instructions": f"Posting p00 (Python Engineer at Acme): {ASKED}"}}
+    assert body["model"] == DEFAULT_DECISION_MODEL
+    schema = body["response_format"]["json_schema"]
+    assert schema["strict"] is True
+    assert schema["schema"] == {"type": "object", "additionalProperties": False, "required": ["fit_probability"], "properties": {"fit_probability": {"type": "number"}}}
+    assert sent(request) == {"question": ASKED, "candidate_cv": "cv", "job_posting": "Python Engineer at Acme. Location: Rome\n\nBuild Python services."}
     assert "Senior Python work." in ASKED and "Rome, Italy" in ASKED
 
 
@@ -80,18 +90,7 @@ def test_a_retryable_failure_is_retried_by_the_client_and_then_answers() -> None
     assert len(seen) == 2
 
 
-def test_a_refused_posting_alone_is_a_failed_verdict_and_not_a_no_opinion() -> None:
-    seen: list[httpx.Request] = []
-
-    def refused(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        return httpx.Response(400, json={"error": "the request is wrong"})
-
-    assert run(client_with(refused), [JOB]) == [None]
-    assert len(seen) == 1
-
-
-def test_a_failure_that_a_smaller_batch_cannot_cure_is_not_split_and_the_person_is_told_why() -> None:
+def test_a_failed_request_fails_its_posting_alone_and_the_person_is_told_why() -> None:
     seen: list[httpx.Request] = []
     said: list[str] = []
 
@@ -99,65 +98,68 @@ def test_a_failure_that_a_smaller_batch_cannot_cure_is_not_split_and_the_person_
         seen.append(request)
         return httpx.Response(400, json={"error": {"message": "the request is wrong", "code": "invalid_request_error"}})
 
-    assert run(client_with(refusing), postings(8), why=said.append) == [None] * 8
+    assert run(client_with(refusing), postings(1), why=said.append) == [None]
     assert len(seen) == 1
-    assert len(said) == 1 and said[0].startswith("OrcaRouter rejected the request.")
+    assert len(said) == 1 and said[0].startswith("OpenAI rejected the request.")
 
 
-@pytest.mark.parametrize("answer", [{"unexpected": 1}, {"answers": {"p00_fit": {"noul": "yes"}}}, {"answers": {"p00_fit": {"noul": 1.5}}}])
+@pytest.mark.parametrize("answer", [{"unexpected": 1}, {"fit_probability": "yes"}, {"fit_probability": 1.5}])
 def test_an_answer_of_another_shape_is_a_failed_verdict(answer: dict[str, Any]) -> None:
-    assert run(client_with(lambda request: httpx.Response(200, json=answer)), [JOB]) == [None]
+    assert run(client_with(lambda request: completion(answer)), [JOB]) == [None]
 
 
-def test_a_missing_answer_fails_only_that_posting() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        return httpx.Response(200, json={"answers": {name: {"type": "noul", "noul": 0.9} for name in body["questions"] if name != "p01_fit"}})
+def test_a_reply_with_no_content_is_a_failed_verdict_and_says_why() -> None:
+    said: list[str] = []
+    message = {"role": "assistant", "content": None, "refusal": "no"}
+    reply = {"id": "c", "object": "chat.completion", "created": 0, "model": "m", "choices": [{"index": 0, "finish_reason": "stop", "message": message}]}
+    assert run(client_with(lambda request: httpx.Response(200, json=reply)), [JOB], why=said.append) == [None]
+    assert len(said) == 1
 
-    assert run(client_with(handler), postings(3)) == [0.9, None, 0.9]
 
-
-def test_up_to_512_postings_go_in_one_request_and_more_make_another_in_order() -> None:
+def test_each_posting_is_one_request_and_the_verdicts_come_back_in_order() -> None:
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        body = json.loads(request.content)
         # Each posting's answer differs, so a value in the wrong place shows.
-        return httpx.Response(200, json={"answers": {name: {"type": "noul", "noul": int(re.search(r"Engineer (\d+) at", question["instructions"])[1]) / 1000} for name, question in body["questions"].items()}})
+        return completion({"fit_probability": int(re.search(r"Engineer (\d+) at", sent(request)["job_posting"])[1]) / 1000})
 
-    values = run(client_with(handler), postings(600))
-    sizes = sorted(len(json.loads(request.content)["state"]["job_postings"]) for request in seen)
-    assert MAX_POSTINGS == 512 and sizes == [88, MAX_POSTINGS]
-    assert values == pytest.approx([number / 1000 for number in range(600)])
+    assert run(client_with(handler), postings(45)) == pytest.approx([number / 1000 for number in range(45)])
+    assert len(seen) == 45
 
 
-def test_a_request_over_the_character_limit_is_split() -> None:
-    seen: list[httpx.Request] = []
-    values = run(client_with(answering(0.7, seen)), postings(40, "x" * DESCRIPTION_CHARS))
-    assert values == [0.7] * 40
-    assert len(seen) >= 2
-    assert all(len(request.content) <= MAX_CHARS for request in seen)
-
-
-def test_a_failing_batch_is_split_until_the_bad_posting_is_alone() -> None:
-    seen: list[httpx.Request] = []
-    answer = answering(0.9, seen)
-
-    def refusing(request: httpx.Request) -> httpx.Response:
+def test_one_failed_posting_leaves_the_others_their_verdicts() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
         if b"Engineer 7 at" in request.content:
-            seen.append(request)
-            return httpx.Response(400, json={"error": {"message": "This model's maximum context length is exceeded", "code": "context_length_exceeded"}})
-        return answer(request)
+            return httpx.Response(400, json={"error": {"message": "the request is wrong", "code": "invalid_request_error"}})
+        return completion({"fit_probability": 0.9})
 
-    values = run(client_with(refusing), postings(100))
-    assert values[7] is None
-    assert values[:7] + values[8:] == [0.9] * 99
-    # Every request that held posting 7 was refused, down to one that held it alone.
-    assert min(len(json.loads(request.content)["state"]["job_postings"]) for request in seen if b"Engineer 7 at" in request.content) == 1
+    values = run(client_with(handler), postings(12))
+    assert values[7] is None and values[:7] + values[8:] == [0.9] * 11
 
 
-def test_the_decision_model_is_pinned_and_settable_in_the_settings(tmp_path: Path) -> None:
-    assert load_config(tmp_path).decision_model == "typesafe/jev-1.14"
+def test_a_description_is_cut_to_the_limit() -> None:
+    seen: list[httpx.Request] = []
+    assert run(client_with(answering(0.7, seen)), postings(1, "x" * (DESCRIPTION_CHARS + 500))) == [0.7]
+    assert sent(seen[0])["job_posting"].count("x") == DESCRIPTION_CHARS
+
+
+def test_no_more_requests_than_the_limit_run_at_once() -> None:
+    now = most = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal now, most
+        now += 1
+        most = max(most, now)
+        await asyncio.sleep(0.01)
+        now -= 1
+        return completion({"fit_probability": 0.5})
+
+    assert run(client_with(handler), postings(CONCURRENT * 5)) == [0.5] * (CONCURRENT * 5)
+    assert most == CONCURRENT
+
+
+def test_the_decision_model_is_settable_in_the_settings(tmp_path: Path) -> None:
+    assert load_config(tmp_path).decision_model == "gpt-6.1-sol"
     (tmp_path / "aihawk.yaml").write_text("decision_model: other/model\n", encoding="utf-8")
     assert load_config(tmp_path).decision_model == "other/model"

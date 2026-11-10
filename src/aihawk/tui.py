@@ -30,7 +30,7 @@ AHEAD = 200
 RESUME_QUESTION = "Where is your resume?"
 MAIL_QUESTION = "The email you apply with."
 MAIL_HINT = "Job sites send their codes there, and AIHawk reads only those · Enter · Esc for later"
-KEY_QUESTION = "Your OrcaRouter key."
+KEY_QUESTION = "Your OpenAI key."
 KEY_HINT = f"Get one at {KEY_URL} · it stays on this computer · Enter saves it"
 MAIL_NAMES = {"gmail": "Gmail", "outlook": "Outlook"}
 RESUME_HINT = "PDF, .docx or text · Enter reads it · Esc for later"
@@ -146,7 +146,7 @@ class AIHawk(App[None]):
         self.query_one(Said).say(line)
 
     def failed(self, error: Exception) -> None:
-        """Says what went wrong, in plain words. A key OrcaRouter refused is forgotten when it came from the file, and asked for again."""
+        """Says what went wrong, in plain words. A key OpenAI refused is forgotten when it came from the file, and asked for again."""
         if not refused(error):
             self.say(explain(error))
             return
@@ -172,7 +172,7 @@ class AIHawk(App[None]):
         return (Text(mark, style="bold green"), score, Text(item.job.company), Text(item.job.title), *place)
 
     def refresh_jobs(self, current: str | None = None) -> None:
-        """The page shown, as it was made: sorted once, by Jev's score, when all of it was scored. A job tried since
+        """The page shown, as it was made: sorted once, by its score, when all of it was scored. A job tried since
         shows its sign, and nothing moves. The cursor stays on the job it was on."""
         table = self.query_one(DataTable)
         current = current or self.current_id()
@@ -253,7 +253,7 @@ class AIHawk(App[None]):
 
     async def score(self) -> None:
         """Pages, PAGE jobs each, up to the one after the page shown, and a round of scored jobs no page holds yet in
-        reserve: Jev reads the next round while the person reads, so a page they turn to is there. A round takes Jev a few
+        reserve: the model reads the next round while the person reads, so a page they turn to is there. A round takes the model a few
         seconds; until the first jobs are on this computer, the line below counts the chunks coming."""
         session = self.session
         store = session.store
@@ -320,7 +320,7 @@ class AIHawk(App[None]):
 
     def make_pages(self) -> None:
         """Pages from the jobs scored and not on one, up to the one after the page shown. A page is PAGE of them, sorted
-        once; a shorter one only when Jev has nothing left to read. A page the person waited for opens."""
+        once; a shorter one only when the model has nothing left to read. A page the person waited for opens."""
         said = self.query_one(Said)
         while len(self.pages) < self.page + 2:
             spare = self.spare()
@@ -443,7 +443,7 @@ class AIHawk(App[None]):
             ("resume", "Resume", "loaded" if config.cv.is_file() else "none yet"),
             ("answers", "Your answers", f"{len(self.session.store.answers())}, given with the CV to every form"),
             ("mail", "Your mail", self.mail_words()),
-            ("key", "OrcaRouter key", f"from {KEY_ENV}" if config.key_from_environment() else "saved" if config.api_key() else "none yet"),
+            ("key", "OpenAI key", f"from {KEY_ENV}" if config.key_from_environment() else "saved" if config.api_key() else "none yet"),
             # The models are not here: a person does not choose one, and aihawk.yaml still changes them.
             ("folder", "Your files", str(config.workspace)),
         ]

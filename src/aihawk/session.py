@@ -22,10 +22,7 @@ from aihawk.profile import ensure_account_password, import_answers_file, install
 from aihawk.shortlist import fits, question, score
 from aihawk.store import SENT_WORDS, SUBMITTED, Store, Stored, write_applied
 
-# Jev reads the next WIDE postings the search ranked best and scores each of them: about what one of its requests holds,
-# 215 to 230 postings with their descriptions on 2026-11-08. What a round waits on is not Jev, three seconds for 512, but
-# their descriptions, each in its own block of a file on Hugging Face: 17 seconds for 100, 20 to 25 for 200, 40 to 90 for
-# 512. A round of 200 shows the first page in half a minute, and the next rounds are read while the person reads.
+# The model reads the next WIDE postings the search ranked best and scores each of them.
 WIDE = 200
 
 Log = Callable[[str], None]
@@ -63,12 +60,12 @@ class Session:
         self._client = None
 
     def refuse_key(self) -> str:
-        """OrcaRouter refused the key. One typed in is forgotten, so the next question asks for another; one from the environment is named."""
+        """OpenAI refused the key. One typed in is forgotten, so the next question asks for another; one from the environment is named."""
         self._client = None
         if self.config.key_from_environment():
-            return f"OrcaRouter refused the key in the {KEY_ENV} variable. Set it to a key from {KEY_URL}, then start AIHawk again."
+            return f"OpenAI refused the key in the {KEY_ENV} variable. Set it to a key from {KEY_URL}, then start AIHawk again."
         self.config.key_file.unlink(missing_ok=True)
-        return f"OrcaRouter refused the key, so AIHawk forgot it. Get one at {KEY_URL} and type it in again."
+        return f"OpenAI refused the key, so AIHawk forgot it. Get one at {KEY_URL} and type it in again."
 
     def needs_resume(self) -> bool:
         return not self.config.cv.is_file() or not self.config.filters.include
@@ -128,8 +125,8 @@ class Session:
         return self.store.add_all(jobs)
 
     async def read(self, log: Log) -> int:
-        """Jev reads the next WIDE postings the search ranked best and scores each one by how sure it is that the job is in
-        line with the candidate. A posting Jev gave no answer for is set aside, not asked again and again. Returns how
+        """The model reads the next WIDE postings the search ranked best and scores each one by how sure it is that the job is in
+        line with the candidate. A posting it gave no answer for is set aside, not asked again and again. Returns how
         many were scored."""
         batch = self.store.with_status("new")[:WIDE]
         if not batch:

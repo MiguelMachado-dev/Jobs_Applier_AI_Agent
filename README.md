@@ -40,19 +40,21 @@ Give it your resume. The job search finds the postings that fit, you pick, and i
 
 ## Install
 
-Windows, in PowerShell:
-
-```powershell
-irm https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/run.ps1 | iex
-```
-
-Linux:
+This fork runs from its own folder, with your OpenAI key ([create one](https://platform.openai.com/api-keys)):
 
 ```bash
-curl -LsSf https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/run.sh | sh
+export OPENAI_API_KEY=sk-...
+./run.sh
 ```
 
-You need a key: [get one from OrcaRouter](https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7).
+On Windows, in PowerShell (macOS has no build of the browser, so forms cannot be filled there):
+
+```powershell
+$env:OPENAI_API_KEY = "sk-..."
+irm https://raw.githubusercontent.com/MiguelMachado-dev/Jobs_Applier_AI_Agent/openai/run.ps1 | iex
+```
+
+Set `AIHAWK_DRY_RUN=1` (in PowerShell, `$env:AIHAWK_DRY_RUN = "1"`) to fill forms without sending them.
 
 ## The count
 

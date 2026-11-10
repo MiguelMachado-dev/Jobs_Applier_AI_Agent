@@ -27,7 +27,7 @@ from openai import AsyncOpenAI
 
 from aihawk.config import KEY_ENV
 from aihawk.database import Job
-from aihawk.llm import SPEND, chat, structured
+from aihawk.llm import SPEND, act, structured
 from aihawk.store import Proof, safe_name
 
 OPEN_DEADLINE_S = 900.0
@@ -323,7 +323,7 @@ async def fill_form(session: Browser, tools: list[dict[str, Any]], client: Async
     messages: list[Any] = [{"role": "system", "content": instructions(guidance, page_rules)}, {"role": "user", "content": brief}]
     watch = _Watch()
     while True:
-        response, request_id = await chat(client, model=model, messages=messages, tools=[*tools, FINISH_TOOL])
+        response, request_id = await act(client, model, messages, [*tools, FINISH_TOOL])
         SPEND.note(model, getattr(response, "usage", None), request_id)
         message = response.choices[0].message
         messages.append(message.model_dump(exclude_none=True))

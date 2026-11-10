@@ -1,8 +1,10 @@
-"""The one model gateway, OrcaRouter: OpenAI's chat API, and the decision model's /systemone call."""
+"""The one model gateway: OpenAI's chat API."""
 
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 from openai import (
@@ -15,8 +17,15 @@ from openai import (
     RateLimitError,
 )
 
-from aihawk.config import DEFAULT_BASE_URL, KEY_ENV, KEY_URL, Config, ConfigError
+from aihawk.config import DEFAULT_BASE_URL, KEY_ENV, KEY_URL, REASONING_EFFORT, Config, ConfigError
 
+# OpenAI's /models gives no prices, so the default models' list prices per token: prompt, completion, cached prompt. From
+# its pricing page on 2026-11-10.
+PRICES = {
+    "gpt-6.1-sol": (2.00e-6, 10.00e-6, 0.10e-6),
+    "gpt-5.4-mini": (0.75e-6, 4.50e-6, 0.075e-6),
+    "gpt-5.4-nano": (0.20e-6, 1.25e-6, 0.02e-6),
+}
 # The SDK's own default is ten minutes a try, and a model that hangs would hold a judgment that long.
 TIMEOUT = 180.0
 
@@ -24,15 +33,13 @@ TIMEOUT = 180.0
 class Spend:
     """What the model calls cost, in dollars: each call's tokens at the gateway's own price for its model, added up.
 
-    The prices come from the gateway's /models list, read once, and give each call's cost the moment it ends. The gateway also keeps
-    a record of what it charged for each request: `settle` reads it for the calls since the last settling and corrects the total,
-    because the list and the charge differ (on 2026-11-07 OrcaRouter charged twice its listed price for DeepSeek flash). A model
-    the list does not price is counted as a call of unknown cost until settled. The decision model's calls are not counted:
-    they go through another endpoint and cost under a cent a hundred.
+    The prices come from PRICES and from the gateway's /models list where it gives any, and give each call's cost the moment it
+    ends. A gateway that keeps a record of what it charged is read by `settle`, which corrects the total. A model neither prices
+    is counted as a call of unknown cost.
     """
 
     def __init__(self) -> None:
-        self.prices: dict[str, tuple[float, float, float]] = {}  # per token: prompt, completion, cached prompt
+        self.prices: dict[str, tuple[float, float, float]] = dict(PRICES)  # per token: prompt, completion, cached prompt
         self.total = 0.0
         self.unpriced = 0
         self.loaded = False
@@ -96,11 +103,65 @@ class Spend:
 
 async def chat(client: AsyncOpenAI, **request: Any) -> tuple[Any, str]:
     """One chat completion, and the gateway's id of the request when the client gives the headers; an empty id otherwise."""
+    request.setdefault("reasoning_effort", REASONING_EFFORT)
     raw = getattr(getattr(getattr(client, "chat", None), "completions", None), "with_raw_response", None)
     if raw is None:
         return await client.chat.completions.create(**request), ""
     response = await raw.create(**request)
     return response.parse(), str(response.headers.get("X-Orca-Request-Id", "") or "")
+
+
+@dataclass
+class _Turn:
+    """A Responses API turn, read the way a chat completion's message is. `output` is sent back whole on the next turn."""
+
+    content: str
+    tool_calls: list[Any] | None
+    output: list[dict[str, Any]]
+
+    def model_dump(self, exclude_none: bool = True) -> dict[str, Any]:
+        return {"role": "assistant", "responses_output": self.output}
+
+
+async def act(client: AsyncOpenAI, model: str, messages: list[Any], tools: list[dict[str, Any]]) -> tuple[Any, str]:
+    """One turn of work with tools, as chat() returns it. GPT-6.1 Sol calls tools only through the Responses API, so the chat
+    messages go there and its answer comes back in the shape of a completion. A client without that API takes the chat one."""
+    responses = getattr(client, "responses", None)
+    if responses is None:
+        return await chat(client, model=model, messages=messages, tools=tools)
+    response = await responses.create(
+        model=model,
+        instructions="\n\n".join(message["content"] for message in messages if message["role"] == "system"),
+        input=_responses_input(messages),
+        tools=[{**tool["function"], "type": "function", "strict": False} for tool in tools],
+        reasoning={"effort": REASONING_EFFORT},
+        # Nothing kept at OpenAI between turns: the reasoning comes back encrypted and is sent with the next one.
+        store=False,
+        include=["reasoning.encrypted_content"],
+    )
+    calls = [SimpleNamespace(id=item.call_id, function=SimpleNamespace(name=item.name, arguments=item.arguments)) for item in response.output if item.type == "function_call"]
+    turn = _Turn(response.output_text, calls or None, [item.model_dump(exclude_none=True) for item in response.output])
+    usage = response.usage
+    counted = usage and SimpleNamespace(
+        prompt_tokens=usage.input_tokens, completion_tokens=usage.output_tokens, prompt_tokens_details=SimpleNamespace(cached_tokens=usage.input_tokens_details.cached_tokens)
+    )
+    return SimpleNamespace(usage=counted, choices=[SimpleNamespace(message=turn)]), ""
+
+
+def _responses_input(messages: list[Any]) -> list[dict[str, Any]]:
+    """Chat messages as the Responses API's input items. The system message goes as its instructions."""
+    items: list[dict[str, Any]] = []
+    for message in messages:
+        role, content = message["role"], message.get("content")
+        if role == "assistant":
+            items += message["responses_output"]
+        elif role == "tool":
+            items.append({"type": "function_call_output", "call_id": message["tool_call_id"], "output": content})
+        elif role == "user" and isinstance(content, str):
+            items.append({"role": "user", "content": content})
+        elif role == "user":
+            items.append({"role": "user", "content": [{"type": "input_image", "image_url": part["image_url"]["url"]} for part in content]})
+    return items
 
 
 SPEND = Spend()
@@ -116,22 +177,22 @@ def money(cost: float) -> str:
 
 
 def refused(error: BaseException) -> bool:
-    """Whether OrcaRouter refused the key: the one failure that the person must fix before anything can work."""
+    """Whether OpenAI refused the key: the one failure that the person must fix before anything can work."""
     return isinstance(error, AuthenticationError)
 
 
 def explain(error: Exception) -> str:
     """What a failed model call says in plain words. The detail stays after it, and the key is never in it."""
     if isinstance(error, APITimeoutError):
-        return f"OrcaRouter did not answer in time. Try again in a moment. ({error})"
+        return f"OpenAI did not answer in time. Try again in a moment. ({error})"
     if isinstance(error, APIConnectionError):
-        return f"OrcaRouter cannot be reached: check your internet connection and try again. ({error})"
+        return f"OpenAI cannot be reached: check your internet connection and try again. ({error})"
     if isinstance(error, RateLimitError):
-        return f"OrcaRouter is asking AIHawk to slow down: wait a few minutes and try again. ({error})"
+        return f"OpenAI is asking AIHawk to slow down: wait a few minutes and try again. ({error})"
     if isinstance(error, InternalServerError):
-        return f"OrcaRouter failed on its side: try again in a few minutes. ({error})"
+        return f"OpenAI failed on its side: try again in a few minutes. ({error})"
     if isinstance(error, BadRequestError):
-        return f"OrcaRouter rejected the request. ({error})"
+        return f"OpenAI rejected the request. ({error})"
     return f"Something failed: {error}"
 
 
@@ -139,7 +200,7 @@ def make_client(config: Config) -> AsyncOpenAI:
     key = config.api_key()
     if not key:
         raise ConfigError(f"no model key: set {KEY_ENV} (create one at {KEY_URL})")
-    # The SDK retries 429s and 5xx itself and honours Retry-After, which is all OrcaRouter sends about its limits.
+    # The SDK retries 429s and 5xx itself and honours Retry-After, which is all OpenAI sends about its limits.
     return AsyncOpenAI(base_url=DEFAULT_BASE_URL, api_key=key, max_retries=5, timeout=TIMEOUT)
 
 

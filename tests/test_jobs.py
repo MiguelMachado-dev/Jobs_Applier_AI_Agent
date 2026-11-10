@@ -486,7 +486,7 @@ def test_a_job_seen_again_keeps_its_score_and_status(tmp_path: Path) -> None:
 
 def test_a_new_folder_defaults_to_the_published_database(tmp_path: Path) -> None:
     config = load_config(tmp_path)
-    assert config.model == "deepseek/deepseek-v4.1-flash" and config.database == "https://huggingface.co/datasets/feder-cr/jobs/resolve/main/library/manifest.json"
+    assert config.model == "gpt-6.1-sol" and config.database == "https://huggingface.co/datasets/feder-cr/jobs/resolve/main/library/manifest.json"
     # A settings file that names the layout before 2026-11-09 reads the new one.
     (tmp_path / "aihawk.yaml").write_text("database: https://huggingface.co/datasets/feder-cr/jobs/resolve/main/manifest.json\n", encoding="utf-8")
     assert load_config(tmp_path).database.endswith("/library/manifest.json")

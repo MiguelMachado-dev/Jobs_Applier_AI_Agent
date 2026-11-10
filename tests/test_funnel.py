@@ -89,17 +89,17 @@ def test_a_failed_request_is_said_with_its_reason_and_the_others_are_scored(tmp_
     def scripted_endpoint(request: httpx.Request) -> httpx.Response:
         if b"Engineer 7 at" in request.content:
             return httpx.Response(400, json={"error": {"message": "maximum context length exceeded", "code": "context_length_exceeded"}})
-        body = json.loads(request.content)
-        return httpx.Response(200, json={"answers": {name: {"type": "noul", "noul": 0.75} for name in body["questions"]}})
+        reply = {"id": "c", "object": "chat.completion", "created": 0, "model": "m", "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": json.dumps({"fit_probability": 0.75})}}]}
+        return httpx.Response(200, json=reply)
 
     # The real verdict, over a scripted endpoint: a posting too large to read alone is one failed verdict, not a crash.
     monkeypatch.setattr(session_module, "fits", shortlist_module.fits)
     session = session_with(tmp_path, 20)
-    session._client = AsyncOpenAI(base_url="https://api.orcarouter.ai/v1", api_key="sk-test", max_retries=0, http_client=httpx.AsyncClient(transport=httpx.MockTransport(scripted_endpoint)))
+    session._client = AsyncOpenAI(base_url="https://api.openai.com/v1", api_key="sk-test", max_retries=0, http_client=httpx.AsyncClient(transport=httpx.MockTransport(scripted_endpoint)))
     said: list[str] = []
     assert asyncio.run(session.read(said.append)) == 19
     assert scored(session)["p008"] == 4.0 and "p007" not in scored(session)
-    assert len(said) == 1 and said[0].startswith("1 of 20 jobs could not be read (OrcaRouter rejected the request.")
+    assert len(said) == 1 and said[0].startswith("1 of 20 jobs could not be read (OpenAI rejected the request.")
 
 
 def test_the_jobs_an_earlier_version_left_to_its_judge_are_read_again(tmp_path: Path) -> None:

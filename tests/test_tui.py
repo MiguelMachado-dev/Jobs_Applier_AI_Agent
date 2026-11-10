@@ -74,7 +74,7 @@ def published(folder: Path) -> str:
 
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv("ORCAROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     folder = tmp_path / "home"
     folder.mkdir()
     (folder / "aihawk.yaml").write_text(f"database: {published(tmp_path)}\n", encoding="utf-8")
@@ -107,18 +107,19 @@ class ScriptedModelForApp:
         self.requests: list[dict[str, Any]] = []
         self.posts: list[dict[str, Any]] = []
 
-    async def post(self, path: str, *, body: dict[str, Any], cast_to: type) -> dict[str, Any]:
-        """The decision endpoint: sure of Bestco, less of Lowly, and of anything else it says no."""
-        self.posts.append(body)
-
-        def sure(instructions: str) -> float:
-            return 0.875 if "Bestco" in instructions else 0.625 if "Lowly" in instructions else 0.125
-
-        return {"answers": {name: {"type": "noul", "noul": sure(question["instructions"])} for name, question in body["questions"].items()}}
+    def verdict(self, request: dict[str, Any]) -> dict[str, float]:
+        """A posting's scoring: sure of Bestco, less of Lowly, and of anything else it says no."""
+        asked = json.loads(request["messages"][1]["content"])
+        self.posts.append(asked)
+        posting = asked["job_posting"]
+        return {"fit_probability": 0.875 if "Bestco" in posting else 0.625 if "Lowly" in posting else 0.125}
 
     async def _create(self, **request: Any) -> Any:
-        self.requests.append(request)
         name = (request.get("response_format") or {}).get("json_schema", {}).get("name")
+        if name == "posting_verdict":
+            content = json.dumps(self.verdict(request))
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content, tool_calls=None))])
+        self.requests.append(request)
         if name == "search_profile":
             content = json.dumps(PROFILE)
         else:
@@ -194,7 +195,7 @@ def test_no_resume_asks_for_one_and_a_wrong_path_asks_again(home: Path, resume: 
 
 
 def test_no_key_asks_for_one_and_keeps_it_on_this_computer(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ORCAROUTER_API_KEY")
+    monkeypatch.delenv("OPENAI_API_KEY")
 
     async def run() -> None:
         app = AIHawk(home, resume)
@@ -520,7 +521,7 @@ def test_a_resume_and_the_files_beside_it_saved_with_a_byte_order_mark_are_read(
     assert read_resume(path).startswith("# Ada")
     (home / "answers.yaml").write_bytes(bom + b"email: ada@example.com\n")
     (home / "aihawk.yaml").write_bytes(bom + f"database: {published(tmp_path)}\n".encode())
-    monkeypatch.delenv("ORCAROUTER_API_KEY")
+    monkeypatch.delenv("OPENAI_API_KEY")
     (home / "key").write_bytes(bom + b"sk-orca-typed\n")
     config = load_config(home)
     store = Store(config.store_file)
@@ -616,7 +617,7 @@ async def wait_for_sign_in_to_close(pilot: Any, app: AIHawk) -> None:
 
 
 
-REQUEST = httpx.Request("POST", "https://api.orcarouter.ai/v1/chat/completions")
+REQUEST = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
 
 
 def status_error(kind: type, code: int) -> Exception:
@@ -624,7 +625,7 @@ def status_error(kind: type, code: int) -> Exception:
 
 
 class RefusingModel:
-    """Every call is refused for its key, as OrcaRouter refuses a wrong one."""
+    """Every call is refused for its key, as OpenAI refuses a wrong one."""
 
     def __init__(self) -> None:
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
@@ -637,8 +638,8 @@ def log_text(app: AIHawk) -> str:
     return "\n".join(line.text for line in app.query_one(RichLog).lines)
 
 
-def test_a_key_from_the_file_that_orcarouter_refuses_is_forgotten_and_asked_for_again(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ORCAROUTER_API_KEY")
+def test_a_key_from_the_file_that_openai_refuses_is_forgotten_and_asked_for_again(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY")
     (home / "key").write_text("sk-orca-wrong", encoding="utf-8")
 
     async def run() -> None:
@@ -647,7 +648,7 @@ def test_a_key_from_the_file_that_orcarouter_refuses_is_forgotten_and_asked_for_
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
             assert isinstance(app.screen, TextPrompt)
-            assert "forgot it" in log_text(app) and "orcarouter.ai" in log_text(app)
+            assert "forgot it" in log_text(app) and "platform.openai.com" in log_text(app)
             assert "sk-orca-wrong" not in log_text(app)
             await pilot.press("escape")
 
@@ -655,14 +656,14 @@ def test_a_key_from_the_file_that_orcarouter_refuses_is_forgotten_and_asked_for_
     assert not (home / "key").exists()
 
 
-def test_a_key_from_the_environment_that_orcarouter_refuses_is_named_and_not_asked_for(home: Path, resume: Path) -> None:
+def test_a_key_from_the_environment_that_openai_refuses_is_named_and_not_asked_for(home: Path, resume: Path) -> None:
     async def run() -> None:
         app = AIHawk(home, resume)
         app.session._client = RefusingModel()  # type: ignore[assignment]
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
             assert not isinstance(app.screen, TextPrompt)
-            assert "ORCAROUTER_API_KEY variable" in log_text(app)
+            assert "OPENAI_API_KEY variable" in log_text(app)
             assert "test-key" not in log_text(app)
 
     asyncio.run(run())
@@ -684,7 +685,7 @@ def test_a_failed_model_call_says_in_plain_words_what_happened_and_keeps_the_det
 
 
 def test_ctrl_c_at_the_key_prompt_leaves(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ORCAROUTER_API_KEY")
+    monkeypatch.delenv("OPENAI_API_KEY")
 
     async def run() -> None:
         app = AIHawk(home, None)
@@ -700,7 +701,7 @@ def test_ctrl_c_at_the_key_prompt_leaves(home: Path, monkeypatch: pytest.MonkeyP
 
 
 def test_leaving_while_a_prompt_is_open_raises_nothing(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ORCAROUTER_API_KEY")
+    monkeypatch.delenv("OPENAI_API_KEY")
 
     async def run() -> None:
         app = AIHawk(home, None)

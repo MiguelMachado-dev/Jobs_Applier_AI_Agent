@@ -10,7 +10,7 @@ With the environment variable `AIHAWK_DRY_RUN` set to anything, an application s
 
 ## What it costs
 
-AIHawk counts the tokens of every model call and prices them with the gateway's own list, read once per start. The log says what each application and each scoring cost. Jev's calls, which score the jobs, are not counted: they go through another endpoint and cost under a cent per hundred postings.
+AIHawk counts the tokens of every model call and prices them with OpenAI's list prices for the default models, kept in `PRICES` in `src/aihawk/llm.py`. Every call runs at the reasoning effort in `REASONING_EFFORT` in `src/aihawk/config.py`, `high`. A model you set that is not in that list costs what OpenAI charges but is shown as "under a cent": add it there.
 
 ## The accounts it made
 
@@ -23,12 +23,12 @@ What the forms are told about you beyond the CV (email, phone, location, links, 
 | Key | Default | What it does |
 |---|---|---|
 | `name` | empty | Your name for this search, shown at the top of the list. |
-| `goals` | empty | What you are looking for, in your own words. Jev reads it. |
+| `goals` | empty | What you are looking for, in your own words. The model that scores the jobs reads it. |
 | `database` | `https://huggingface.co/datasets/feder-cr/jobs/resolve/main/library/manifest.json` | Where the job database is: the URL of its `manifest.json`, or the path of a local one. AIHawk downloads into `data/library` the chunks the search's days need, the newest jobs first; after that, only what changed. |
 | `max_age_days` | `15` | How many days back a search looks; "Posted within (days)" in Settings. AIHawk downloads only the part of the database these days need, all of it before the first search. The database holds the last 60 days, so a larger number finds nothing more. A posting its source does not date is dated by the day the database first saw it. |
-| `model` | `deepseek/deepseek-v4.1-flash` | Fills the application forms. |
-| `quick_model` | `google/gemini-3.5-flash` | Writes the search plan from your CV, and the other short calls of a search. |
-| `decision_model` | `typesafe/jev-1.14` | Jev, which answers for each posting whether it is in line with you; how sure it is makes the score, from 1 to 5. |
+| `model` | `gpt-6.1-sol` | Fills the application forms, through the Responses API. Needs tools and images. |
+| `quick_model` | `gpt-6.1-sol` | Writes the search plan from your CV, and the other short calls of a search. |
+| `decision_model` | `gpt-6.1-sol` | Answers for each posting whether it is in line with you; how sure it is makes the score, from 1 to 5. |
 | `filters.include` | empty | Title words to search for. With no `plan`, each word is one title. AIHawk asks for a resume until there is a CV and at least one of these. Reading a resume writes this and `plan`, and the Settings screen does not offer them: a different search comes from a different resume. |
 | `filters.exclude` | empty | Whole words: a posting whose title has one of them is left out. |
 | `filters.locations` | empty | Places a posting's location must name, as whole words. |

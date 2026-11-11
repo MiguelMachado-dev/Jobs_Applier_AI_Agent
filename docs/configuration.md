@@ -1,6 +1,6 @@
 ﻿# Configuration
 
-Press `e` in AIHawk to change these on the screen. AIHawk reads `aihawk.yaml` in its folder, `~/.aihawk` by default. A missing file, or a missing key, takes the default below. Restart `aihawk` after you edit the file.
+Press `e` in AIHawk to change these on the screen. AIHawk reads `aihawk.yaml` in its folder, `~/.aihawk` by default, or the folder in the `AIHAWK_HOME` variable: give each person their own folder and they get their own CV, answers, browser sign-ins and job list. A missing file, or a missing key, takes the default below. Restart `aihawk` after you edit the file.
 
 Loading a resume rewrites this file, and the rewrite drops the comments you put in it, so keep your notes elsewhere.
 

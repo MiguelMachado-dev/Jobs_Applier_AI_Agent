@@ -137,8 +137,13 @@ class Config:
         self.key_file.write_text(key.strip(), encoding="utf-8")
 
 
+# Set, it is the folder AIHawk keeps everything in: a second person on the same computer gets a profile of their own.
+HOME_ENV = "AIHAWK_HOME"
+
+
 def default_home() -> Path:
-    return Path.home() / ".aihawk"
+    chosen = os.environ.get(HOME_ENV, "").strip()
+    return Path(chosen).expanduser() if chosen else Path.home() / ".aihawk"
 
 
 def _words(value: object, name: str) -> tuple[str, ...]:

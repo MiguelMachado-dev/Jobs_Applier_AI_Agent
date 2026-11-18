@@ -1,14 +1,16 @@
-"""The one model gateway: OpenAI's chat API."""
+"""The one model gateway, OpenAI: its chat and Responses APIs, the cost of its calls and how a failed call is told."""
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
 from openai import (
     APIConnectionError,
+    APIStatusError,
     APITimeoutError,
     AsyncOpenAI,
     AuthenticationError,
@@ -26,12 +28,18 @@ PRICES = {
     "gpt-5.4-mini": (0.75e-6, 4.50e-6, 0.075e-6),
     "gpt-5.4-nano": (0.20e-6, 1.25e-6, 0.02e-6),
 }
-# The SDK's own default is ten minutes a try, and a model that hangs would hold a judgment that long.
+
+# The SDK's own default is ten minutes a try, and a model that hangs would hold a request that long.
 TIMEOUT = 180.0
 
 
+# A spend's total and tokens at one moment: see Spend.mark.
+Mark = tuple[float, dict[str, tuple[int, int]]]
+
+
 class Spend:
-    """What the model calls cost, in dollars: each call's tokens at the gateway's own price for its model, added up.
+    """What the model calls cost, in dollars: each call's tokens at the gateway's own price for its model, added up. The
+    tokens each model took in and gave out are counted too, every call, priced or not.
 
     The prices come from PRICES and from the gateway's /models list where it gives any, and give each call's cost the moment it
     ends. A gateway that keeps a record of what it charged is read by `settle`, which corrects the total. A model neither prices
@@ -44,6 +52,8 @@ class Spend:
         self.unpriced = 0
         self.loaded = False
         self.pending: list[tuple[str, float]] = []  # the gateway's id of each call not yet settled, and its estimate
+        # The tokens each model took in and gave out.
+        self.tokens: dict[str, tuple[int, int]] = {}
 
     async def load_prices(self, client: AsyncOpenAI) -> None:
         """The price list, once. A gateway that does not give one leaves every call unpriced; nothing else stops."""
@@ -64,15 +74,17 @@ class Spend:
     def note(self, model: str, usage: Any, request_id: str = "") -> float:
         """One call's cost, estimated from its usage and added to the total; its gateway id kept for settling. Zero, and one more
         unpriced call, when the price is unknown."""
-        estimate = 0.0
         if usage is None:
-            # A client that says nothing about tokens: nothing to estimate, and nothing to call unpriced.
+            # A client that says nothing about tokens: nothing to count or estimate, and nothing to call unpriced.
             if request_id:
                 self.pending.append((request_id, 0.0))
             return 0.0
+        prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion = int(getattr(usage, "completion_tokens", 0) or 0)
+        taken, given = self.tokens.get(model, (0, 0))
+        self.tokens[model] = (taken + prompt, given + completion)
+        estimate = 0.0
         if (price := self.prices.get(model)) is not None:
-            prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
-            completion = int(getattr(usage, "completion_tokens", 0) or 0)
             details = getattr(usage, "prompt_tokens_details", None)
             cached = int(getattr(details, "cached_tokens", 0) or 0)
             estimate = (prompt - cached) * price[0] + cached * price[2] + completion * price[1]
@@ -82,6 +94,20 @@ class Spend:
         if request_id:
             self.pending.append((request_id, estimate))
         return estimate
+
+    def mark(self) -> Mark:
+        """Where the count stands now, to ask later what came after it."""
+        return self.total, dict(self.tokens)
+
+    def since(self, mark: Mark) -> tuple[float, dict[str, tuple[int, int]]]:
+        """What the calls after `mark` cost, and the tokens each model took in and gave out in them; a model that took none is left out."""
+        total, before = mark
+        used = {}
+        for model, (taken, given) in self.tokens.items():
+            taken_before, given_before = before.get(model, (0, 0))
+            if (taken, given) != (taken_before, given_before):
+                used[model] = (taken - taken_before, given - given_before)
+        return self.total - total, used
 
     async def settle(self, client: AsyncOpenAI) -> None:
         """What the gateway says it charged for each call not yet settled, in place of the estimate. A record it does not have yet
@@ -104,7 +130,7 @@ class Spend:
 async def chat(client: AsyncOpenAI, **request: Any) -> tuple[Any, str]:
     """One chat completion, and the gateway's id of the request when the client gives the headers; an empty id otherwise."""
     request.setdefault("reasoning_effort", REASONING_EFFORT)
-    raw = getattr(getattr(getattr(client, "chat", None), "completions", None), "with_raw_response", None)
+    raw =getattr(getattr(getattr(client, "chat", None), "completions", None), "with_raw_response", None)
     if raw is None:
         return await client.chat.completions.create(**request), ""
     response = await raw.create(**request)
@@ -181,26 +207,159 @@ def refused(error: BaseException) -> bool:
     return isinstance(error, AuthenticationError)
 
 
-def explain(error: Exception) -> str:
-    """What a failed model call says in plain words. The detail stays after it, and the key is never in it."""
+# OpenAI's code for an account with no credit left. It comes with a 429, the status of a rate limit, which waiting does not mend.
+NO_QUOTA = "insufficient_quota"
+
+
+def _out_of_quota(error: BaseException) -> bool:
+    return isinstance(error, RateLimitError) and reply(error)[0] == NO_QUOTA
+
+
+def not_answering(error: BaseException) -> bool:
+    """Whether the service failed to answer, not that it answered no: no connection, too slow, too busy, or broken on its side.
+    The same request can work a moment later, so the postings in it are asked about again, not set aside. An account out of
+    credit is not one of these, though OpenAI answers it with a 429."""
+    if _out_of_quota(error):
+        return False
+    if isinstance(error, APIConnectionError | RateLimitError):
+        return True
+    return isinstance(error, APIStatusError) and (error.status_code == 408 or error.status_code >= 500)
+
+
+def account_problem(error: BaseException) -> bool:
+    """Whether the service refused for what is about the account and not about one posting: no credit left (402, or OpenAI's
+    429 insufficient_quota), no right to ask (403), or nothing there to ask (404). Asking again changes nothing, and nothing is
+    set aside for it."""
+    return _out_of_quota(error) or (isinstance(error, APIStatusError) and error.status_code in (402, 403, 404))
+
+
+def no_credit(error: BaseException) -> bool:
+    """Whether the account has no credit: OpenAI answers 429 insufficient_quota, another gateway 402."""
+    return _out_of_quota(error) or (isinstance(error, APIStatusError) and error.status_code == 402)
+
+
+# The end of a gateway's message that names the request for its support and tells a person nothing.
+REQUEST_ID = re.compile(r"\s*\(request id: [^)]*\)\s*$")
+# A key can be in a message the service sends back; it never reaches the screen.
+KEY_SHAPE = re.compile(r"sk-[A-Za-z0-9_\-]{6,}")
+# How much of an unexplained refusal a person is shown.
+REFUSAL_WORDS = 120
+# A code the service sends is sent on to the makers only when it looks like one.
+CODE_SHAPE = re.compile(r"[A-Za-z0-9_.\-]{1,60}")
+
+
+def reply(error: BaseException) -> tuple[str, str]:
+    """The code and the message the service gave with a refusal, read from the error's body with care: the body may be the error
+    itself or wrapped in an "error" key, or missing, and the message then is the error's own text."""
+    body = getattr(error, "body", None)
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        body = body["error"]
+    given = body if isinstance(body, dict) else {}
+    code = given.get("code")
+    message = given.get("message")
+    own = str(getattr(error, "message", "") or "")
+    return (str(code) if code is not None else ""), (message if isinstance(message, str) else own)
+
+
+# Where an OpenAI account gets credit, and where its project's limits and model access are set.
+BILLING_URL = "platform.openai.com/settings/organization/billing"
+LIMITS_URL = "platform.openai.com/settings/organization/limits"
+
+# What `cause` names: every reason that is about the account or the key, so the same for the next request too.
+ACCOUNT_CAUSES = frozenset({"no_credit", "free_calls_used", "key_limit", "spend_limit", "budget", "model_not_allowed", "refused_other"})
+
+
+def cause(error: BaseException) -> str:
+    """Why the service refused for the account, as a short name; empty when the error is not about the account. OpenAI's 429
+    insufficient_quota, or a 402, is no credit; a 404 is a model the key cannot use; 403 has several causes that topping up
+    does not mend, each told apart by the code the service gives or, for some, only by its message."""
+    if not isinstance(error, APIStatusError):
+        return ""
+    code, message = reply(error)
+    if _out_of_quota(error):
+        return "no_credit"
+    if error.status_code == 402:
+        return "free_calls_used" if code == "free_quota_exhausted" else "no_credit"
+    if error.status_code == 404:
+        return "model_not_allowed" if code == "model_not_found" else ""
+    if error.status_code != 403:
+        return ""
+    if code == "pre_consume_token_quota_failed" or "token quota is not enough" in message:
+        return "key_limit"
+    if "token cycle spend limit reached" in message:
+        return "spend_limit"
+    if code == "budget_exceeded":
+        return "budget"
+    if "has no access to model" in message:
+        return "model_not_allowed"
+    return "refused_other"
+
+
+def error_name(error: BaseException) -> str:
+    """An error as the makers are told of it: its class, then the status and the service's code when it has them, such as
+    "APIStatusError 402 insufficient_user_quota". The class alone does not say which 4xx it was."""
+    name = type(error).__name__
+    if not isinstance(error, APIStatusError):
+        return name
+    code, _ = reply(error)
+    return " ".join([name, str(error.status_code), *([code] if CODE_SHAPE.fullmatch(code) else [])])
+
+
+def refusal_in_words(error: BaseException) -> str:
+    """The service's own message for a refusal nothing above explains, without its request id, cut to a few words."""
+    _, message = reply(error)
+    message = KEY_SHAPE.sub("sk-…", REQUEST_ID.sub("", message)).strip()
+    if message.startswith("Error code:"):
+        # The error's own text, not the service's: it says nothing a person can use.
+        return ""
+    return message if len(message) <= REFUSAL_WORDS else message[: REFUSAL_WORDS - 1].rstrip() + "…"
+
+
+def known(error: BaseException) -> bool:
+    """Whether `explain` has words for this kind of error. One it has none for is unexpected, and goes to the error log."""
+    return isinstance(error, APIConnectionError | RateLimitError | InternalServerError | BadRequestError) or account_problem(error)
+
+
+def explain(error: Exception, step: str = "press → to go on.") -> str:
+    """What a failed model call says in plain words and what to do about it; `step` is what to press once the account is mended,
+    for the place the call failed in. The error's own text stays out, but for a refusal nothing explains: the key can be in it."""
+    why = cause(error)
+    if why == "no_credit":
+        return f"Your OpenAI account has no credit left. Add some at {BILLING_URL}, then {step}"
+    if why == "free_calls_used":
+        return f"The free calls for today are used up. Add credit at {BILLING_URL}, then {step}"
+    after = f" Then {step}"
+    if why == "key_limit":
+        return f"This key's own limit is used up. Raise it, or make a new key, at {LIMITS_URL}.{after}"
+    if why == "spend_limit":
+        return f"This key reached its spending limit for now. Raise it at {LIMITS_URL}, or wait until it resets.{after}"
+    if why == "budget":
+        return f"Your OpenAI budget for this month is used up. Raise it at {LIMITS_URL}.{after}"
+    if why == "model_not_allowed":
+        return f"This key is not allowed to use the models AIHawk needs. Check the project's model access at {LIMITS_URL}.{after}"
+    if why == "refused_other":
+        said = refusal_in_words(error)
+        return f"OpenAI refused this key for the request{': ' + said.rstrip('.') if said else ''}.{after}"
+    if account_problem(error):
+        return f"The AI service refused the request. Check your OpenAI account at platform.openai.com, then {step}"
     if isinstance(error, APITimeoutError):
-        return f"OpenAI did not answer in time. Try again in a moment. ({error})"
+        return "The AI service did not answer in time. Try again in a moment."
     if isinstance(error, APIConnectionError):
-        return f"OpenAI cannot be reached: check your internet connection and try again. ({error})"
+        return "Cannot reach the AI service. Check your internet connection."
     if isinstance(error, RateLimitError):
-        return f"OpenAI is asking AIHawk to slow down: wait a few minutes and try again. ({error})"
+        return "The AI service is busy. Wait a minute."
     if isinstance(error, InternalServerError):
-        return f"OpenAI failed on its side: try again in a few minutes. ({error})"
+        return "The AI service has a problem on its side. Try again in a few minutes."
     if isinstance(error, BadRequestError):
-        return f"OpenAI rejected the request. ({error})"
-    return f"Something failed: {error}"
+        return "The AI service did not accept the request."
+    return "Something went wrong. Try again in a moment."
 
 
 def make_client(config: Config) -> AsyncOpenAI:
     key = config.api_key()
     if not key:
         raise ConfigError(f"no model key: set {KEY_ENV} (create one at {KEY_URL})")
-    # The SDK retries 429s and 5xx itself and honours Retry-After, which is all OpenAI sends about its limits.
+    # The SDK retries 429s and 5xx itself and honours Retry-After.
     return AsyncOpenAI(base_url=DEFAULT_BASE_URL, api_key=key, max_retries=5, timeout=TIMEOUT)
 
 

@@ -2,21 +2,42 @@
 
 ## Unreleased
 
+- An application to a posting that is clearly closed ends in seconds, without the browser: AIHawk asks the posting's own site first, with one plain request, for Lever, Ashby, Greenhouse, Workable, BambooHR, Paylocity and Workday, and the list says "the posting is closed". The other sites, and any check that does not answer clearly, are tried as before.
+- The job library keeps the last 30 days instead of 60: nothing older is published, so the first download is about half the size (the build of 2026-11-09 held 4.36 million postings older than 30 days, of 8.6 million). A search that asks for more than 30 days finds the same as one for 30. Closed postings do not depend on age (measured on 360), so age is no reason to keep them.
+- Reading the resume refused by OrcaRouter as too many requests now says, in a question with the link to add credit, that its free plan is not enough for AIHawk: Enter reads the resume again, Esc leaves the line that says r does it.
+- AIHawk tells its makers the country the computer is set to, two letters read from its own settings, and no longer lets the service work out a city from the address.
+- An application whose browser could not open or start no longer ends as "RuntimeError": the list says "the browser did not open" or "the browser took too long to start", and the server's own words stay in `errors.log`.
+- The browser's download in the background no longer starts while a browser is open or opening: the jobs finishing in the middle of the first application started a second download of the same browser, which cleared the folder the first one was starting from. A mailbox sign-in now waits for a download already under way, as an application does.
+- The check for a key's credit asked a page that tells 100000000 dollars for every key with no limit of its own, which is how OrcaRouter makes them, so an account with nothing on it was never told before the resume. It reads OrcaRouter's balance page now, which says what the key can really spend.
+- The mail is no longer asked before the first job shows: the question comes with the first application that needs a code from a site, then the mailbox opens for the sign-in and that application is sent again. Left for later, it is not asked again until AIHawk is opened again, and Settings, Your mail, still sets it.
+- A form the page's own validation refuses (a required box left empty) is no longer "not confirmed": it says which field, and the AI gets one more turn to fix it. A Lever form that sends the browser to the company's own website, with the application's id in the address, is read as received.
+- On a Mac, or a Linux that is not x86-64, the browser AIHawk applies with has no version: AIHawk says so when it opens and when `a` is pressed, instead of opening a browser that cannot start. Finding and scoring jobs works there.
+- A new OrcaRouter account has no credit, and the first thing AIHawk asks of it, reading the resume, was refused with "Something failed: Error code: 402". The key is now checked for credit when it is entered, and AIHawk says so before the resume, with a key that opens the site and one that checks again. When a request is refused for the account or the key, the screen says which it is (no credit, the key's own limit, its spending limit, a model it may not use) and what to press; the resume is remembered, and a key is never forgotten for it.
+- The jobs show up as they come: the first chunk is searched and read as soon as it is here, and the list grows after each chunk, with the rows you are reading held in place and the jobs you selected kept. The wait line counts megabytes and says about how long is left.
+- The key is tried when you paste it, and a key OrcaRouter does not accept is asked for again; Ctrl+C copies selected text instead of leaving, and Ctrl+O at the key question opens the address. Finished credit stops the scoring and the sending with a plain line, and no job is set aside for it.
+- A form that gets no answer from the AI service waits 20 to 60 seconds and goes on, instead of failing after 14. The browser's download is said on the screen and starts in the background once the jobs are all here. On Linux without a desktop or the browser's libraries, an application says so at once.
+- An unexpected error shows one plain line and writes its details to `errors.log` in the data folder, keys masked.
+- The install needs no git: the one-line command brings AIHawk's code as an archive, 7 MB where the clone of its repository was 180, and the first start is about a minute shorter. A start with no connection opens the copy already on the computer.
+- A request the AI service does not answer (no connection, too busy, down) no longer sets the jobs aside for good: they are asked again after a pause, and after four tries the screen says to press the right arrow. Jobs an earlier version set aside this way are read again. A search that finds nothing says so, an empty list says which key comes next, and a new search lists its own jobs only.
+- Sending says which job it is on, ends with one summary line, and marks each job in the list: ✓ sent, ? sent but not confirmed, ✗ not sent, with the reason in plain words. Quitting while applications are sent asks first. The key, resume, mail and send questions say what they are for, errors drop their technical tails, and the log shows three lines.
+- AIHawk tells its makers, anonymously, how it is used: how a start went and where it stopped, how many jobs a search found, and how each application ended, with the tokens each model used and no price. Nothing about you or the jobs goes with it, and a dry run is not counted.
+- Jev alone scores the jobs: for each posting, whether it is in line with the resume, and how sure the answer is is the score. The list comes in pages of 50, the next one read while you read, and a posting Jev gave no answer for is set aside, not asked again and again.
+- The job database comes from Hugging Face, in chunks of complete postings, newest first. A search looks back 15 days by default (`max_age_days`), only the chunks those days need are downloaded, all before the first search, and after that only what changed.
+
 - Space and Enter both select a job, and `i` opens it: its role, company, place and the posting's own text, as paragraphs, with nothing else. `s`, the applications, is shown at the bottom; an application's details say how it went in plain words, and the models are no longer in the settings.
 - The one-command install runs on Python 3.14: on 3.15 PyYAML has no Windows build yet, and the install stopped asking for a C++ compiler.
 
 - Added [docs/sites.md](docs/sites.md): each site's status from real forms and what stops it; the README links to it.
 - Added [docs/data-sources.md](docs/data-sources.md), each source with its licence and how to ask for its removal, and [docs/configuration.md](docs/configuration.md).
 - A model error that a smaller batch cannot cure stops at once and says why, instead of ranking by title almost silently.
-- The job database is shown with its real date.
-- A posting the judge could not read is no longer passed over for good: a later search judges it.
-- After a send, the page is read once it has changed and stopped changing, up to 30 seconds, and the verdict sees its address: a slow confirmation page is no longer judged on the old form.
+- The screen shows how many jobs the whole database holds.
+- After a send, the page is read once it has changed and stopped changing, up to 30 seconds, and the verdict sees its address: a slow confirmation page is no longer read as the old form.
 - A posting whose title or company looks like screen markup, such as `[/x]`, no longer stops the screen.
 - A database of your own, named by `database` in `aihawk.yaml`, can no longer make AIHawk read a file on your computer: a posting whose address is not `http` or `https` is left out of a search. The published database already left those out.
-- A full disk while the job index downloads says the disk is full.
+- A full disk while the job database downloads says the disk is full.
 - A job whose source published no text is scored on the text of its own page where that can be read, which also finds postings that have closed.
 - The README shows real captures of the screen.
-- Sending says, per job, how it went, and the screen says what to do next. The list fits an 80-column terminal, the index download shows its progress, and a job's details can select it or open it.
+- Sending says, per job, how it went, and the screen says what to do next. The list fits an 80-column terminal, the job download shows its progress, and a job's details can select it or open it.
 - One command starts AIHawk, and everything else is on the screen: `e` opens the settings.
 - A form no longer stops to ask. The model fills every required field from what the CV says and implies, and a written field it has nothing for says to see the attached CV.
 - The checks on the model's calls are gone, for far less code: it is told not to send, and nothing holds it to that. See SECURITY.md.

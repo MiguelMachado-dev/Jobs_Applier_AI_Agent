@@ -1,4 +1,4 @@
-"""The model's verdict: the request's shape, the one question, the score from its certainty, one posting to a request, the client's retries and the failed verdicts. No network: a scripted endpoint stands in."""
+"""The model's verdict: the request's shape, the one question, the score from its certainty, one posting to a request, the client's retries, the failed verdicts and the ones not judged. No network: a scripted endpoint stands in."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from openai import AsyncOpenAI
 
 from aihawk.config import DEFAULT_BASE_URL, DEFAULT_DECISION_MODEL, load_config
 from aihawk.database import Job
-from aihawk.shortlist import CONCURRENT, DESCRIPTION_CHARS, fits, question, score
+from aihawk.scoring import CONCURRENT, DESCRIPTION_CHARS, NOT_JUDGED, fits, question, score
 
 KEY = "sk-test-key"
 JOB = Job("g:a:1", "Acme", "Python Engineer", "Rome", "u", "a", "Build Python services.")
@@ -47,7 +47,7 @@ def answering(certainty: float, seen: list[httpx.Request]) -> Any:
 
 
 def run(client: AsyncOpenAI, jobs: list[Job], cv: str = "cv", why: Callable[[str], None] = lambda reason: None) -> list[float | None]:
-    return asyncio.run(fits(client, DEFAULT_DECISION_MODEL, cv, jobs, ASKED, lambda done: None, why))
+    return asyncio.run(fits(client, DEFAULT_DECISION_MODEL, cv, jobs, ASKED, why))
 
 
 def postings(count: int, description: str = "") -> list[Job]:
@@ -100,7 +100,7 @@ def test_a_failed_request_fails_its_posting_alone_and_the_person_is_told_why() -
 
     assert run(client_with(refusing), postings(1), why=said.append) == [None]
     assert len(seen) == 1
-    assert len(said) == 1 and said[0].startswith("OpenAI rejected the request.")
+    assert len(said) == 1 and said[0] == "The AI service did not accept the request."
 
 
 @pytest.mark.parametrize("answer", [{"unexpected": 1}, {"fit_probability": "yes"}, {"fit_probability": 1.5}])
@@ -163,3 +163,51 @@ def test_the_decision_model_is_settable_in_the_settings(tmp_path: Path) -> None:
     assert load_config(tmp_path).decision_model == "gpt-6.1-sol"
     (tmp_path / "aihawk.yaml").write_text("decision_model: other/model\n", encoding="utf-8")
     assert load_config(tmp_path).decision_model == "other/model"
+
+
+def client_answering(status: int, body: Any) -> AsyncOpenAI:
+    return AsyncOpenAI(base_url=DEFAULT_BASE_URL, api_key=KEY, max_retries=0, http_client=httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(status, json=body))))
+
+
+@pytest.mark.parametrize("status", [429, 500, 503, 408])
+def test_a_service_that_does_not_answer_leaves_the_postings_not_judged_and_says_nothing_of_them(status: int) -> None:
+    said: list[str] = []
+    assert run(client_answering(status, {"error": "busy"}), postings(3), why=said.append) == [NOT_JUDGED] * 3
+    assert said == []
+
+
+def test_a_lost_connection_leaves_the_postings_not_judged() -> None:
+    def lost(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no route", request=request)
+
+    client = AsyncOpenAI(base_url=DEFAULT_BASE_URL, api_key=KEY, max_retries=0, http_client=httpx.AsyncClient(transport=httpx.MockTransport(lost)))
+    assert run(client, [JOB]) == [NOT_JUDGED]
+
+
+@pytest.mark.parametrize("status", [402, 403, 404])
+def test_what_is_about_the_account_and_not_about_a_posting_is_raised_and_no_posting_is_set_aside(status: int) -> None:
+    from openai import APIStatusError
+
+    with pytest.raises(APIStatusError) as raised:
+        run(client_answering(status, {"error": "no"}), postings(3))
+    assert raised.value.status_code == status
+
+
+def test_an_openai_account_out_of_credit_is_raised_and_not_asked_again_as_a_busy_service() -> None:
+    from openai import RateLimitError
+
+    body = {"error": {"message": "You exceeded your current quota, please check your plan and billing details.", "type": "insufficient_quota", "code": "insufficient_quota"}}
+    with pytest.raises(RateLimitError):
+        run(client_answering(429, body), postings(3))
+
+
+def test_an_account_with_no_credit_is_told_in_plain_words_and_what_to_do() -> None:
+    from openai import APIStatusError, RateLimitError
+
+    from aihawk.llm import explain
+
+    request = httpx.Request("POST", "https://x.example")
+    paid = "Your OpenAI account has no credit left. Add some at platform.openai.com/settings/organization/billing, then press → to go on."
+    assert explain(APIStatusError("Error code: 402", response=httpx.Response(402, request=request), body=None)) == paid
+    quota = RateLimitError("Error code: 429", response=httpx.Response(429, request=request), body={"code": "insufficient_quota", "message": "quota"})
+    assert explain(quota) == paid

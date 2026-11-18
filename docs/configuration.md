@@ -10,7 +10,7 @@ With the environment variable `AIHAWK_DRY_RUN` set to anything, an application s
 
 ## What it costs
 
-AIHawk counts the tokens of every model call and prices them with OpenAI's list prices for the default models, kept in `PRICES` in `src/aihawk/llm.py`. Every call runs at the reasoning effort in `REASONING_EFFORT` in `src/aihawk/config.py`, `high`. A model you set that is not in that list costs what OpenAI charges but is shown as "under a cent": add it there.
+AIHawk counts the tokens of every model call and prices them with OpenAI's list prices for the default models, kept in `PRICES` in `src/aihawk/llm.py`. The details of each application, on `s`, say what it cost. Every call runs at the reasoning effort in `REASONING_EFFORT` in `src/aihawk/config.py`, `high`. A model you set that is not in that list costs what OpenAI charges but is counted as unpriced: add it there.
 
 ## The accounts it made
 
@@ -18,14 +18,13 @@ A site that needs a candidate account, such as Workday, gets one made with your 
 
 ## Your answers
 
-What the forms are told about you beyond the CV (email, phone, location, links, and anything you add) lives in the `answers` table of `data/jobs.db`, the SQLite file in the AIHawk folder. Press `e`, then "Your answers", to see, change or add them; an answer you gave is kept when a new resume is read. `email` and `mail_provider` (gmail or outlook) are the mailbox AIHawk opens for you to sign in to, asked once after the resume and again from "Your mail" in Settings; a site's code can only be read from a mailbox you are signed in to. AIHawk makes an `account_password` the first time it starts and keeps it there: the one password it uses on job sites that need an account, such as Workday, so you can sign in to those sites yourself. It is kept sealed, encrypted with a key in `data/secret.key`, and shown plain under "Your answers". The `answers.yaml` of earlier versions is read once, brought into the table and renamed `answers.yaml.imported`.
+What the forms are told about you beyond the CV (email, phone, location, links, and anything you add) lives in the `answers` table of `data/jobs.db`, the SQLite file in the AIHawk folder. Press `e`, then "Your answers", to see, change or add them; an answer you gave is kept when a new resume is read. `email` and `mail_provider` (gmail or outlook) are the mailbox AIHawk opens for you to sign in to, asked the first time a form needs a site's code (not before), and again from "Your mail" in Settings; a site's code can only be read from a mailbox you are signed in to. AIHawk makes an `account_password` the first time it starts and keeps it there: the one password it uses on job sites that need an account, such as Workday, so you can sign in to those sites yourself. It is kept sealed, encrypted with a key in `data/secret.key`, and shown plain under "Your answers". The `answers.yaml` of earlier versions is read once, brought into the table and renamed `answers.yaml.imported`.
 
 | Key | Default | What it does |
 |---|---|---|
-| `name` | empty | Your name for this search, shown at the top of the list. |
 | `goals` | empty | What you are looking for, in your own words. The model that scores the jobs reads it. |
 | `database` | `https://huggingface.co/datasets/feder-cr/jobs/resolve/main/library/manifest.json` | Where the job database is: the URL of its `manifest.json`, or the path of a local one. AIHawk downloads into `data/library` the chunks the search's days need, the newest jobs first; after that, only what changed. |
-| `max_age_days` | `15` | How many days back a search looks; "Posted within (days)" in Settings. AIHawk downloads only the part of the database these days need, all of it before the first search. The database holds the last 60 days, so a larger number finds nothing more. A posting its source does not date is dated by the day the database first saw it. |
+| `max_age_days` | `15` | How many days back a search looks; "Posted within (days)" in Settings. AIHawk downloads only the part of the database these days need, all of it before the first search. The database holds the last 30 days, so a larger number finds nothing more. A posting its source does not date is dated by the day the database first saw it. |
 | `model` | `gpt-6.1-sol` | Fills the application forms, through the Responses API. Needs tools and images. |
 | `quick_model` | `gpt-6.1-sol` | Writes the search plan from your CV, and the other short calls of a search. |
 | `decision_model` | `gpt-6.1-sol` | Answers for each posting whether it is in line with you; how sure it is makes the score, from 1 to 5. |

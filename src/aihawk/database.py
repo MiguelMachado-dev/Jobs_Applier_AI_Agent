@@ -19,11 +19,11 @@ import duckdb
 from aihawk.config import Arc, Filters, Form, Node, Plan
 from aihawk.library import Library
 
-# How many postings a search brings back to be judged. Past these, a title fits the search too little to be worth a look.
+# How many postings a search brings back to be scored. Past these, a title fits the search too little to be worth a look.
 RECALL = 600
 # What being in the person's own city is worth, against a node of the plan: about as much as a named skill.
 CITY_WEIGHT = 1.5
-# What a posting with no description keeps of its score: judged on its title alone, it needs a title twice as fitting to
+# What a posting with no description keeps of its score: ranked on its title alone, it needs a title twice as fitting to
 # come before one that has a description.
 UNDESCRIBED = 0.5
 # What a remote posting's location says when it does not narrow the job to a place: the database writes "Remote" for one
@@ -60,9 +60,9 @@ def posting_keys(urls: list[str]) -> list[str]:
         connection.close()
 
 
-def unreachable(error: BaseException) -> str:
-    """What a database that cannot be downloaded says: in plain words, the detail kept after them."""
-    return f"The job database cannot be reached: check your internet connection, then start AIHawk again. ({error})"
+def unreachable() -> str:
+    """What a database that cannot be downloaded says: in plain words, and what to do. The error's own text is for the makers."""
+    return "Cannot reach the job list. Check your internet connection, then start AIHawk again."
 
 
 def load_manifest(location: str) -> dict[str, Any]:
@@ -73,8 +73,8 @@ def load_manifest(location: str) -> dict[str, Any]:
         return json.loads(Path(location).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as error:
         if isinstance(error, OSError) and location.startswith(("http://", "https://")):
-            raise DatabaseError(unreachable(error)) from error
-        raise DatabaseError(f"the job database's manifest at {location} cannot be read: {error}") from error
+            raise DatabaseError(unreachable()) from error
+        raise DatabaseError(f"The job list at {location} cannot be read.") from error
 
 
 def _word_pattern(words: tuple[str, ...]) -> str:
@@ -205,12 +205,12 @@ def search(library: Library, filters: Filters, max_age_days: int, limit: int = R
 
     The plan's nodes score a title by their best wording that it holds, weighted by how rare the wording is among the
     postings of this place: "Python" tells more than "Engineer". Arcs then scale the title, and the person's own city adds
-    to it. A posting is known by its address. Its description is read when a job is judged, not here.
+    to it. A posting is known by its address. Its description is read when a job is scored, not here.
     """
     plan = _plan_of(filters)
     nodes = tuple(node for node in plan.nodes if node.forms)
     if not nodes:
-        raise DatabaseError("the search has no job titles: give AIHawk a resume")
+        raise DatabaseError("There are no job titles to search for yet. Press r and give your resume.")
     mean = sum(node.weight for node in nodes) / len(nodes)
     if mean <= 0:
         raise DatabaseError("the plan weighs nothing: give a node a weight above 0")
@@ -242,7 +242,7 @@ def search(library: Library, filters: Filters, max_age_days: int, limit: int = R
             ).fetchall()
         ]
     except duckdb.Error as error:
-        raise DatabaseError(f"the jobs on this computer cannot be read: {error}") from error
+        raise DatabaseError("The jobs saved on this computer cannot be read. Start AIHawk again.") from error
     finally:
         connection.close()
 

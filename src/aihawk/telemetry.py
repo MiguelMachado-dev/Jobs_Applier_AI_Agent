@@ -1,0 +1,226 @@
+"""What AIHawk tells its makers about how it is used, for all its users together: to PostHog, anonymously.
+
+Each event carries an id made at random the first time AIHawk runs on a computer, so a person's events count once, and
+nothing about the person: no name, email, CV, answer, job, company, link, city or address. What goes, and EVENTS below is the
+same list:
+
+- `app_started`: AIHawk's version, the operating system, and the country the computer is set to (two letters, read from its own
+  settings with no network; empty when they say none). Every event asks PostHog not to look up where its IP address is, which it
+  would do on arrival, down to the city: the country is the only place that is known.
+- `start_step`: each step of a start, not only the first one (the key, whether its account has no credit or the free plan is too little, and what the person
+  did about it, the resume, the jobs' download, the first job on the screen, and the mail, asked about when a form needs a site's code),
+  and the seconds since AIHawk opened;
+  an `error` is the error's name with the status and the service's code when it has them, so that a 402 and a 403 are told
+  apart. `app_closed`: the last step reached, whether a search ran, how long AIHawk was open.
+- `search`: how many jobs the search found, and how many of them were new to this computer.
+- `jobs_scored`: how many postings the model read in a round, how many it answered for, how long the round took.
+- `application`: how it ended (submitted, unconfirmed, refused, blocked, failed), why in one word (a name from apply.py's
+  WHY_NOT_SENT, or the name of the error's class: `browser_did_not_open` and `browser_not_ready` when the browser could not be
+  opened, never the browser server's own words), the kind of site (the
+  plugin's name, or the vendor's name when the form's host is a known application site, else "other": never the host),
+  the models, the gateway, the steps, the seconds, and the tokens each model took in and gave out. No price and no
+  currency: the owner turns tokens into money himself.
+
+The owner's decisions: it cannot be turned off (2026-11-11), and this list is kept here, not in the README (2026-11-12).
+A dry run is not counted. The project
+key is PostHog's write-only key, made to be public: it can send events and read nothing.
+"""
+
+from __future__ import annotations
+
+import json
+import locale
+import os
+import platform
+import re
+import sys
+import threading
+import time
+import urllib.request
+import uuid
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+from aihawk import __version__
+from aihawk.config import DEFAULT_BASE_URL, dry_run
+
+PROJECT_KEY = "phc_pfK4un6Vf6wppby8tpzexsWcVmwXBUHFZpbUSciZqkag"
+CAPTURE = "https://us.i.posthog.com/i/v0/e/"
+INSTALL_ID = "install_id"
+GATEWAY = urlsplit(DEFAULT_BASE_URL).hostname
+
+# Every event and the properties it carries, besides the version and the operating system that all of them carry. The
+# dashboard and the counters read only these, and a test holds every call in the code to them.
+EVENTS: dict[str, tuple[str, ...]] = {
+    "app_started": ("country",),
+    "start_step": ("step", "seconds", "error", "kind", "chunks"),
+    "app_closed": ("last_step", "searched", "seconds"),
+    "search": ("found", "new"),
+    "jobs_scored": ("postings", "answered", "seconds", "scoring_model"),
+    "application": (
+        "outcome", "reason", "site", "plugin", "forms_model", "scoring_model", "gateway", "steps", "seconds", "models",
+        "input_tokens", "output_tokens", "tokens_by_model",
+    ),
+}  # fmt: skip
+
+# Hosts of the sites that take an employer's application, each with its vendor: the pipeline's VENDOR_HOSTS without the job
+# boards and aggregators, matched the same way (the fragment is contained in the form's host). Only these names are ever
+# sent, so a company's own host never is.
+KNOWN_SITES = (
+    ("myworkdayjobs.com", "workday"), ("myworkdaysite.com", "workday"), ("smartrecruiters.com", "smartrecruiters"),
+    ("greenhouse.io", "greenhouse"), ("lever.co", "lever"), ("ashbyhq.com", "ashby"), ("icims.com", "icims"),
+    ("paylocity.com", "paylocity"), ("adp.com", "adp"), ("oraclecloud.com", "oracle"), ("taleo.net", "taleo"),
+    ("successfactors", "successfactors"), ("sapsf.", "successfactors"), ("jobvite.com", "jobvite"), ("bamboohr.com", "bamboohr"),
+    ("applytojob.com", "jazzhr"), ("breezy.hr", "breezy"), ("recruitee.com", "recruitee"), ("teamtailor.com", "teamtailor"),
+    ("personio.", "personio"), ("workable.com", "workable"), ("pinpointhq.com", "pinpoint"), ("rippling.com", "rippling"),
+    ("ultipro.com", "ukg"), ("ukg.net", "ukg"), ("dayforcehcm.com", "dayforce"), ("paycomonline.", "paycom"),
+    ("csod.com", "cornerstone"), ("careerplug.com", "careerplug"), ("recruiterflow.com", "recruiterflow"),
+    ("zohorecruit.", "zoho"), ("jobs.gem.com", "gem"), ("applicantpro.com", "applicantpro"), ("isolvedhire.com", "isolved"),
+    ("eightfold.ai", "eightfold"), ("avature.net", "avature"), ("phenompeople.com", "phenom"), ("join.com", "join"),
+    ("hrmos.co", "hrmos"), ("gupy.io", "gupy"), ("softgarden.", "softgarden"), ("jobscore.com", "jobscore"),
+    ("freshteam.com", "freshteam"), ("manatal.com", "manatal"), ("keka.com", "keka"), ("darwinbox.", "darwinbox"),
+    ("recruiterbox.com", "recruiterbox"), ("betterteam.com", "betterteam"), ("brassring.com", "brassring"),
+    ("governmentjobs.com", "neogov"), ("schooljobs.com", "neogov"), ("recruitingbypaycor.com", "paycor"),
+    ("applitrack.com", "applitrack"), ("hrmdirect.com", "hrmdirect"), ("cadienttalent.com", "cadient"),
+    ("hireology.com", "hireology"), ("workstream.us", "workstream"), ("paradox.ai", "paradox"), ("apploi.com", "apploi"),
+    ("pageuppeople.com", "pageup"), ("comeet.com", "comeet"), ("dover.com", "dover"), ("silkroad.com", "silkroad"),
+    ("hirebridge.com", "hirebridge"), ("careers-page.com", "manatal"), ("jobappnetwork.com", "jobappnetwork"),
+)  # fmt: skip
+
+
+def vendor_of(host: str) -> str:
+    """The application-site vendor a form's host names, or "other": a company's own host is not sent."""
+    host = host.lower()
+    return next((vendor for fragment, vendor in KNOWN_SITES if fragment in host), "other")
+
+
+def region_of(name: str) -> str:
+    """The two-letter country a locale's name ends with ("en_GB.UTF-8" and "pt-BR" give GB and BR), or "" when it names none:
+    "C", "POSIX", "en" and a script or a number ("zh-Hans", "es-419") are no country."""
+    parts = re.split(r"[_-]", name.split(".")[0].split("@")[0])
+    region = parts[-1].upper() if len(parts) > 1 else ""
+    return region if re.fullmatch(r"[A-Z]{2}", region) else ""
+
+
+def windows_country() -> str:
+    """The "Country or region" the person set in Windows, as its ISO code; the region of the language's name when that is not
+    set. The system's own answer, with no network."""
+    import ctypes
+
+    kernel = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    buffer = ctypes.create_unicode_buffer(16)
+    if (nation := kernel.GetUserGeoID(16)) > 0 and kernel.GetGeoInfoW(nation, 4, buffer, len(buffer), 0) and re.fullmatch(r"[A-Z]{2}", buffer.value):
+        return buffer.value
+    buffer = ctypes.create_unicode_buffer(85)
+    return region_of(buffer.value) if kernel.GetUserDefaultLocaleName(buffer, len(buffer)) else ""
+
+
+def computer_country() -> str:
+    """The two-letter country the computer is set to, uppercase, or "" when it cannot be told. It reads the computer's own
+    settings and never the network, never raises and is fast: it is the only place AIHawk reports."""
+    try:
+        if sys.platform == "win32":
+            return windows_country()
+        # The first of these that is set is the one the system uses, as the C library reads them.
+        if name := next((value for variable in ("LC_ALL", "LC_CTYPE", "LANG") if (value := os.environ.get(variable))), ""):
+            return region_of(name) or region_of(locale.getlocale()[0] or "")
+        return region_of(locale.getlocale()[0] or "")
+    except Exception:  # noqa: BLE001  A place that cannot be told is no place; it never stops AIHawk.
+        return ""
+
+
+def install_id(data_dir: Path) -> str:
+    """This computer's random id, made once and kept with the data. One that cannot be kept is made again each time."""
+    path = data_dir / INSTALL_ID
+    try:
+        if path.is_file() and (kept := path.read_text(encoding="utf-8").strip()):
+            return kept
+        made = str(uuid.uuid4())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(made, encoding="utf-8")
+        return made
+    except OSError:
+        return str(uuid.uuid4())
+
+
+class Telemetry:
+    """The events of one run of AIHawk, and how far its start came: where people stop before their first search."""
+
+    def __init__(self, data_dir: Path) -> None:
+        self.data_dir = data_dir
+        self.opened = time.monotonic()
+        self.last_step = "opened"
+        self.searched = False
+        self._id: str | None = None
+
+    def track(self, event: str, **properties: Any) -> None:
+        """One event, sent in the background: AIHawk never waits for it. Not a daemon thread, so quitting right after an
+        application still sends it, within the request's timeout. A dry run sends nothing."""
+        if dry_run():
+            return
+        if self._id is None:
+            self._id = install_id(self.data_dir)
+        body = {
+            "api_key": PROJECT_KEY,
+            "event": event,
+            "distinct_id": self._id,
+            "properties": {
+                **properties,
+                "version": __version__,
+                "os": platform.system(),
+                # No person profile: the id only counts people, and an event with no profile costs PostHog less.
+                "$process_person_profile": False,
+                # PostHog's switch for the lookup of the sender's IP address, which would give the city: only `country` is sent.
+                "$geoip_disable": True,
+                "$lib": "aihawk",
+            },
+        }
+        threading.Thread(target=send, args=(body,), name="telemetry").start()
+
+    def started(self) -> None:
+        self.track("app_started", country=computer_country())
+
+    def step(self, name: str, **properties: Any) -> None:
+        """How far a start has come."""
+        self.last_step = name
+        self.track("start_step", step=name, seconds=self.seconds(), **properties)
+
+    def search(self, found: int, new: int) -> None:
+        self.searched = True
+        self.track("search", found=found, new=new)
+
+    def scored(self, postings: int, answered: int, seconds: float, scoring_model: str) -> None:
+        self.track("jobs_scored", postings=postings, answered=answered, seconds=seconds, scoring_model=scoring_model)
+
+    def application(
+        self, outcome: str, reason: str, steps: int, seconds: float, plugin: str | None, host: str,
+        forms_model: str, scoring_model: str, tokens: dict[str, tuple[int, int]],
+    ) -> None:
+        """How an application went. `tokens` is what each model took in and gave out on it, as the gateway counted them. The
+        site is the plugin's name, or the vendor of the form's host: the host itself stays here."""
+        self.track(
+            "application", outcome=outcome, reason=reason, site=plugin or vendor_of(host), plugin=plugin is not None,
+            forms_model=forms_model, scoring_model=scoring_model, gateway=GATEWAY, steps=steps, seconds=seconds,
+            models=sorted(tokens), input_tokens=sum(taken for taken, _ in tokens.values()),
+            output_tokens=sum(given for _, given in tokens.values()),
+            tokens_by_model={model: {"input": taken, "output": given} for model, (taken, given) in tokens.items()},
+        )
+
+    def closed(self) -> None:
+        self.track("app_closed", last_step=self.last_step, searched=self.searched, seconds=self.seconds())
+
+    def seconds(self) -> float:
+        return round(time.monotonic() - self.opened, 1)
+
+
+def send(body: dict[str, Any]) -> None:
+    """The request, its answer read and dropped. An event that cannot be sent is lost, and nothing else happens."""
+    request = urllib.request.Request(
+        CAPTURE, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json", "User-Agent": "AIHawk"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            response.read()
+    except Exception:  # noqa: BLE001, S110  Telemetry must never stop or slow AIHawk.
+        pass

@@ -19,6 +19,7 @@ from aihawk.apply import (
     PAGE_CHARS,
     SYSTEM,
     Outcome,
+    Report,
     apply_to_job,
     fill_form,
     instructions,
@@ -26,6 +27,7 @@ from aihawk.apply import (
     server_parameters,
     sign_in,
 )
+from aihawk.config import DRY_RUN_ENV
 from aihawk.database import Job
 from fakes import ScriptedBrowser, ScriptedModel, tool_call
 
@@ -190,7 +192,7 @@ def test_the_same_call_with_the_same_answer_is_warned_then_stopped_and_nothing_i
     browser = ScriptedBrowser()
     model = ScriptedModel(*[[tool_call("browser_press_key", key="End")] for _ in range(LOOP_STOP)])
     report = asyncio.run(fill_form(browser, [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert report["status"] == "blocked" and "going round in circles: browser_press_key" in report["summary"]
+    assert report.status == "blocked" and "going round in circles: browser_press_key" in report.summary
     told = [m["content"] for m in model.requests[-1]["messages"] if isinstance(m, dict) and m.get("role") == "user"]
     assert sum("nothing on the page changes" in str(text) for text in told) == 1
     assert len(browser.calls) == LOOP_STOP and browser.clicks() == []
@@ -209,13 +211,13 @@ def test_a_key_that_moves_down_a_list_is_not_a_loop() -> None:
     steps = [[tool_call("browser_press_key", key="ArrowDown")] for _ in range(3 * LOOP_STOP)]
     model = ScriptedModel(*steps, [tool_call("finish_form", status="blocked", summary="list read", submit_selector="")])
     report = asyncio.run(fill_form(_MovingList(), [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert report["summary"] == "list read"
+    assert report.summary == "list read"
 
 
 def test_a_model_that_only_talks_is_stopped() -> None:
     model = ScriptedModel("thinking", "still thinking", "nearly")
     report = asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert report["status"] == "blocked" and "without using the tools" in report["summary"]
+    assert report.status == "blocked" and "without using the tools" in report.summary
 
 
 def test_waiting_for_a_code_that_never_comes_ends_at_the_fifth_look_with_nothing_new() -> None:
@@ -223,7 +225,7 @@ def test_waiting_for_a_code_that_never_comes_ends_at_the_fifth_look_with_nothing
     look = [tool_call("browser_evaluate", expression=wait), tool_call("browser_read_text", selector="body")]
     model = ScriptedModel(*[look for _ in range(LOOP_STOP)])
     report = asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert report["status"] == "blocked" and "browser_evaluate, browser_read_text" in report["summary"]
+    assert report.status == "blocked" and "browser_evaluate, browser_read_text" in report.summary
 
 
 @pytest.mark.parametrize(("confidence", "stopped"), [(0.95, True), (0.5, False)])
@@ -233,8 +235,8 @@ def test_a_loop_no_fingerprint_sees_is_stopped_when_a_model_is_sure_of_it(monkey
     steps = [[tool_call("browser_press_key", key="ArrowDown")], [tool_call("browser_press_key", key="ArrowDown")], verdict]
     model = ScriptedModel(*steps, [tool_call("finish_form", status="blocked", summary="went on", submit_selector="")])
     report = asyncio.run(fill_form(_MovingList(), [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert (report["summary"] == "Stopped going round in circles: uploads the CV and fills the fields again") is stopped
-    assert (report["summary"] == "went on") is not stopped
+    assert (report.summary == "Stopped going round in circles: uploads the CV and fills the fields again") is stopped
+    assert (report.summary == "went on") is not stopped
 
 
 class SignedOutMailbox(ScriptedBrowser):
@@ -256,7 +258,7 @@ def test_a_mailbox_that_sends_the_browser_to_its_sign_in_page_ends_the_form_for_
 def test_a_signed_in_mailbox_goes_on() -> None:
     model = ScriptedModel([tool_call("browser_navigate", url="https://mail.google.com/mail/u/0/")], [tool_call("finish_form", status="blocked", summary="code read", submit_selector="")])
     report = asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert report["summary"] == "code read" and "mailbox_signed_out" not in report
+    assert report.summary == "code read" and not report.blocked_by
 
 
 def test_a_send_control_that_matches_several_elements_goes_back_to_the_model() -> None:
@@ -266,7 +268,7 @@ def test_a_send_control_that_matches_several_elements_goes_back_to_the_model() -
         [tool_call("finish_form", status="ready", summary="filled", submit_selector="#send")],
     )
     report = asyncio.run(fill_form(browser, [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert report["submit_selector"] == "#send"
+    assert report.submit_selector == "#send"
     told = [m["content"] for m in model.requests[-1]["messages"] if isinstance(m, dict) and m.get("role") == "tool"]
     assert "matches 3 elements" in told[-1]
     assert browser.clicks() == []
@@ -282,11 +284,11 @@ def test_the_plugins_text_reaches_the_verifying_model_as_its_rules_while_the_pag
     assert guidance not in verifying[1]["content"]
 
 
-def test_a_send_slow_to_show_is_judged_on_the_page_it_reached_with_its_address(tmp_path: Path) -> None:
+def test_a_send_slow_to_show_is_read_on_the_page_it_reached_with_its_address(tmp_path: Path) -> None:
     model = ScriptedModel(ready(), json.dumps({"outcome": "submitted", "evidence": "the page"}))
     outcome = run(model, SlowSend(reads_until_moved=8), tmp_path / "shot.png")
-    judged = model.requests[-1]["messages"][-1]["content"]
-    assert "https://u/thanks" in judged and "Application received" in judged and "the form" not in judged
+    read = model.requests[-1]["messages"][-1]["content"]
+    assert "https://u/thanks" in read and "Application received" in read and "the form" not in read
     assert outcome.proof.text == "Application received" and outcome.proof.url == "https://u/thanks"
 
 
@@ -473,7 +475,7 @@ class MovesAfterItIsRead(ScriptedBrowser):
         return result
 
 
-def test_a_page_judged_before_it_moved_on_is_judged_again_where_it_went(tmp_path: Path) -> None:
+def test_a_page_read_before_it_moved_on_is_read_again_where_it_went(tmp_path: Path) -> None:
     says = (json.dumps({"outcome": "rejected", "evidence": "still the Review step"}), VERIFIED)
     browser = MovesAfterItIsRead()
     outcome = run(ScriptedModel(ready(), *says), browser, tmp_path / "proof.png")
@@ -547,7 +549,7 @@ def test_what_goes_wrong_in_the_browser_comes_out_as_itself(tmp_path: Path, monk
 
 def test_a_dry_run_fills_the_form_names_the_send_control_and_sends_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A trial of a site or a plugin with a test CV: the environment variable stops the application before the click.
-    monkeypatch.setenv(apply_module.DRY_RUN_ENV, "1")
+    monkeypatch.setenv(DRY_RUN_ENV, "1")
     browser = ScriptedBrowser({"#send": SUBMIT}, page={"url": "https://u/apply", "text": "the form"})
     outcome = asyncio.run(run_on_page(browser, [], ScriptedModel(ready()), "m", JOB, "cv", "account_password: Secret!9x\nemail: a@b.c", Path("cv.pdf"), tmp_path / "proofs" / "shot.png"))  # type: ignore[arg-type]
     assert outcome.status == "blocked"
@@ -607,7 +609,7 @@ def test_moving_about_inside_one_mailbox_visit_is_free(tmp_path: Path) -> None:
         ready(),
     )
     report = asyncio.run(fill_form(browser, [], model, "m", "the brief"))  # type: ignore[arg-type]
-    assert report["status"] == "ready" and mailbox_pages(browser) == 3
+    assert report.status == "ready" and mailbox_pages(browser) == 3
 
 
 def test_the_third_arrival_at_the_mailbox_ends_the_form_blocked(tmp_path: Path) -> None:
@@ -622,7 +624,7 @@ def test_the_third_arrival_at_the_mailbox_ends_the_form_blocked(tmp_path: Path) 
         ready(),
     )
     report = asyncio.run(fill_form(browser, [], model, "m", "the brief"))  # type: ignore[arg-type]
-    assert report == {"status": "blocked", "summary": apply_module.NO_CODE, "submit_selector": ""}
+    assert report == Report("blocked", apply_module.NO_CODE, blocked_by=apply_module.NO_CODE_REASON, steps=5)
     assert mailbox_pages(browser) == 2
 
 
@@ -647,3 +649,394 @@ def test_a_form_that_made_no_account_says_so(tmp_path: Path) -> None:
     model = ScriptedModel([tool_call("finish_form", status="blocked", summary="a puzzle", submit_selector="", made_account=False)])
     outcome = asyncio.run(run_on_page(browser, [], model, "m", JOB, "cv", "answers", Path("cv.pdf"), tmp_path / "shot.png"))  # type: ignore[arg-type]
     assert outcome.made_account is False and outcome.status == "blocked"
+
+
+# A model call that gets no answer is asked again after a wait, not given up on.
+
+
+def slow_down(headers: dict[str, str] | None = None, status: int = 429) -> Exception:
+    import httpx
+    from openai import APIStatusError, RateLimitError
+
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    return (RateLimitError if status == 429 else APIStatusError)(f"Error code: {status}", response=httpx.Response(status, headers=headers or {}, request=request), body=None)
+
+
+@pytest.fixture
+def slept(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """The waits an application asks for, with no waiting."""
+    waits: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(apply_module.asyncio, "sleep", sleep)
+    return waits
+
+
+class Failing:
+    """A call that fails with each of `errors` in turn, then answers."""
+
+    def __init__(self, *errors: Exception) -> None:
+        self.errors = list(errors)
+        self.calls = 0
+
+    async def __call__(self) -> str:
+        self.calls += 1
+        if self.errors:
+            raise self.errors.pop(0)
+        return "answered"
+
+
+def test_a_call_the_service_does_not_answer_waits_20_40_60_60_seconds_and_then_fails_with_its_own_error(slept: list[float]) -> None:
+    from openai import RateLimitError
+
+    assert apply_module.RATE_WAITS == (20, 40, 60, 60)
+    call = Failing(*[slow_down() for _ in range(5)])
+    with pytest.raises(RateLimitError):
+        asyncio.run(apply_module.patiently(call))
+    assert slept == [20, 40, 60, 60] and call.calls == 5
+
+
+def test_a_call_that_answers_after_a_wait_is_the_same_call(slept: list[float]) -> None:
+    call = Failing(slow_down(), slow_down(status=503))
+    assert asyncio.run(apply_module.patiently(call)) == "answered"
+    assert slept == [20, 40] and call.calls == 3
+
+
+def test_the_wait_the_service_asks_for_is_the_one_taken_and_never_more_than_two_minutes(slept: list[float]) -> None:
+    call = Failing(slow_down({"retry-after": "7"}), slow_down({"retry-after-ms": "2500"}), slow_down({"retry-after": "900"}), slow_down({"retry-after": "soon"}))
+    assert asyncio.run(apply_module.patiently(call)) == "answered"
+    assert slept == [7, 2.5, 120, 60]
+
+
+@pytest.mark.parametrize("error", [ValueError("no"), slow_down(status=400), slow_down(status=402), slow_down(status=404)])
+def test_an_error_that_waiting_cannot_cure_is_not_waited_on(error: Exception, slept: list[float]) -> None:
+    call = Failing(error)
+    with pytest.raises(type(error)):
+        asyncio.run(apply_module.patiently(call))
+    assert slept == [] and call.calls == 1
+
+
+def test_the_screen_is_told_while_it_waits_and_when_the_work_goes_on(slept: list[float]) -> None:
+    told: list[str] = []
+    token = apply_module.NOTE.set(told.append)
+    try:
+        asyncio.run(apply_module.patiently(Failing(slow_down({"retry-after": "40"}), slow_down(status=503))))
+    finally:
+        apply_module.NOTE.reset(token)
+    assert told == ["The AI service asked to slow down: waiting 40 seconds…", "", "The AI service is not answering: waiting 40 seconds…", ""]
+
+
+class SlowedModel(ScriptedModel):
+    """The first `slowed` requests are answered 429, then the script goes on; the request that was refused is kept too."""
+
+    def __init__(self, slowed: int, *steps: Any) -> None:
+        super().__init__(*steps)
+        self.slowed = slowed
+
+    async def _create(self, **request: Any) -> Any:
+        if self.slowed:
+            self.slowed -= 1
+            self.requests.append(request)
+            raise slow_down()
+        return await super()._create(**request)
+
+
+def test_a_form_goes_on_after_a_wait_with_what_the_model_is_sent_unchanged(slept: list[float]) -> None:
+    model = SlowedModel(2, ready())
+    report = asyncio.run(fill_form(ScriptedBrowser({"#send": SUBMIT}), [], model, "m", "brief"))  # type: ignore[arg-type]
+    assert report.status == "ready" and slept == [20, 40]
+    # Three requests, the same one each time.
+    assert len(model.requests) == 3 and model.requests[0]["messages"] == model.requests[1]["messages"] == model.requests[2]["messages"]
+
+
+def test_the_reading_of_the_page_after_a_send_goes_on_after_a_wait_too(slept: list[float], tmp_path: Path) -> None:
+    class SlowedVerdict(ScriptedModel):
+        async def _create(self, **request: Any) -> Any:
+            # The verifying model is the second call: the first is the form's.
+            if len(self.requests) == 1 and not getattr(self, "refused_once", False):
+                self.refused_once = True
+                raise slow_down()
+            return await super()._create(**request)
+
+    outcome = run(SlowedVerdict(ready(), VERIFIED), ScriptedBrowser({"#send": SUBMIT}), tmp_path / "proof.png")
+    assert outcome.status == "submitted" and [wait for wait in slept if wait] == [20]
+
+
+# The browser's engine: what the screen says while it comes, and what a Linux without a screen is told.
+
+
+def test_the_servers_words_about_its_download_become_one_line_for_the_screen() -> None:
+    words = apply_module.getting_the_browser
+    assert words("the engine is not on this machine yet and is downloading now: 37% of 270 MB. Call browser_open again in a minute.") == (
+        "Getting the browser, only the first time: 37% of 270 MB…"
+    )
+    assert words("the engine is not on this machine yet; its download is starting. Call browser_open again in a minute.") == (
+        "Getting the browser, only the first time: about 270 MB…"
+    )
+    assert words("the engine has downloaded and is being verified, which takes a moment.") == "Getting the browser, only the first time: almost done…"
+    assert words("the page did not load") == ""
+
+
+def test_the_screen_is_told_while_the_browser_comes_and_when_it_is_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "OPEN_RETRY_S", 0)
+    answers = iter(["downloading now: 10% of 270 MB.", "downloading now: 60% of 270 MB."])
+
+    class Server:
+        async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+            if name == "browser_open":
+                return SimpleNamespace(isError=False, content=[SimpleNamespace(text="the engine is not on this machine yet and is " + next(answers, "ready"))])
+            if name == "browser_navigate" and next(answers, None) is not None:
+                return SimpleNamespace(isError=True, content=[SimpleNamespace(text="not open")])
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(text="ok")])
+
+    told: list[str] = []
+    token = apply_module.NOTE.set(told.append)
+    try:
+        asyncio.run(apply_module._open_browser(Server(), Path("profile")))  # type: ignore[arg-type]
+    finally:
+        apply_module.NOTE.reset(token)
+    assert told[0].startswith("Getting the browser, only the first time: ") and told[-1] == ""
+
+
+def test_a_browser_that_does_not_open_is_named_and_keeps_the_servers_words_for_the_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Server:
+        async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+            return SimpleNamespace(isError=True, content=[SimpleNamespace(text="the browser did NOT start: C:/Users/someone/engine is gone")])
+
+    with pytest.raises(apply_module.BrowserDidNotOpen) as raised:
+        asyncio.run(apply_module._open_browser(Server(), Path("profile")))  # type: ignore[arg-type]
+    assert isinstance(raised.value, RuntimeError)
+    assert raised.value.reason == "browser_did_not_open"
+    assert "C:/Users/someone/engine is gone" in str(raised.value)
+    assert apply_module.why_not_sent(raised.value.reason) == "the browser did not open"
+
+
+def test_a_browser_that_is_never_ready_is_named_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "OPEN_DEADLINE_S", -1)
+    monkeypatch.setattr(apply_module, "OPEN_RETRY_S", 0)
+
+    class Server:
+        async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+            return SimpleNamespace(isError=name == "browser_navigate", content=[SimpleNamespace(text="the engine is not on this machine yet")])
+
+    with pytest.raises(apply_module.BrowserDidNotOpen) as raised:
+        asyncio.run(apply_module._open_browser(Server(), Path("profile")))  # type: ignore[arg-type]
+    assert raised.value.reason == "browser_not_ready"
+    assert apply_module.why_not_sent("browser_not_ready") == "the browser took too long to start"
+
+
+def test_on_linux_with_no_desktop_the_browser_is_not_tried_and_the_person_is_told(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(apply_module, "PLATFORM", "linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    @asynccontextmanager
+    async def never(upload_dir: Path, home: Path) -> AsyncIterator[Any]:
+        raise AssertionError("the browser was opened")
+        yield
+
+    monkeypatch.setattr(apply_module, "_server", never)
+    outcome = asyncio.run(apply_to_job(ScriptedModel(), "m", JOB, "cv", "answers", tmp_path / "cv.pdf", tmp_path, tmp_path / "profile"))
+    assert outcome.status == "blocked" and outcome.reason == "no_display"
+    assert outcome.summary == "The browser needs a desktop: run AIHawk on a computer with a screen."
+    assert apply_module.why_not_sent("no_display") == "the browser needs a desktop"
+
+
+def test_on_linux_without_the_gtk_library_the_person_is_told_the_packages_for_debian_and_ubuntu(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(apply_module, "PLATFORM", "linux")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(apply_module.ctypes.util, "find_library", lambda name: None)
+    reason, words = apply_module.missing_for_the_browser() or ("", "")
+    assert reason == "browser_libraries"
+    # One line that works on both: the names with t64 of Ubuntu 24.04 first, the names before it after.
+    assert words == (
+        "The browser needs a few system packages. On Debian or Ubuntu: sudo apt-get install -y libgtk-3-0t64 libasound2t64 libx11-xcb1 libdbus-glib-1-2"
+        " || sudo apt-get install -y libgtk-3-0 libasound2 libx11-xcb1 libdbus-glib-1-2"
+    )
+    assert apply_module.why_not_sent("browser_libraries") == "the browser needs a few system packages"
+    monkeypatch.setattr(apply_module.ctypes.util, "find_library", lambda name: "libgtk-3.so.0")
+    assert apply_module.missing_for_the_browser() is None
+    monkeypatch.setenv("DISPLAY", "")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    assert apply_module.missing_for_the_browser() is None
+
+
+def test_on_a_mac_or_a_linux_of_another_kind_the_browser_has_no_version_and_the_person_is_told(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "PLATFORM", "darwin")
+    reason, words = apply_module.missing_for_the_browser() or ("", "")
+    assert reason == "no_browser_here" and words.startswith("On a Mac AIHawk finds and scores jobs, but cannot send applications yet")
+    assert apply_module.why_not_sent("no_browser_here") == "the browser has no version for this computer"
+    monkeypatch.setattr(apply_module, "PLATFORM", "linux")
+    monkeypatch.setattr(apply_module, "MACHINE", "aarch64")
+    assert (apply_module.missing_for_the_browser() or ("", ""))[0] == "no_browser_here"
+    monkeypatch.setattr(apply_module, "MACHINE", "x86_64")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(apply_module.ctypes.util, "find_library", lambda name: "libgtk-3.so.0")
+    assert apply_module.missing_for_the_browser() is None
+
+
+def test_on_windows_nothing_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "PLATFORM", "win32")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    assert apply_module.missing_for_the_browser() is None
+
+
+class Readings(ScriptedBrowser):
+    """A page whose text is read at length: each reading of it is a different long text, and a click answers in a word."""
+
+    def __init__(self) -> None:
+        super().__init__({"#send": SUBMIT})
+        self.reads = 0
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        if name == "browser_read_text" and (arguments or {}).get("selector") != "body":
+            self.reads += 1
+            self.calls.append((name, arguments or {}))
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(text=f"reading {self.reads}: " + "x" * 4000)])
+        return await super().call_tool(name, arguments)
+
+
+class Snapshots(ScriptedModel):
+    """A scripted model that keeps the messages of each request as they were when it was made."""
+
+    def __init__(self, *steps: Any) -> None:
+        super().__init__(*steps)
+        self.seen: list[list[dict[str, Any]]] = []
+
+    async def _create(self, **request: Any) -> Any:
+        self.seen.append(json.loads(json.dumps(request["messages"])))
+        return await super()._create(**request)
+
+
+def read_page() -> list[Any]:
+    return [tool_call("browser_read_text", selector="#form")]
+
+
+def click_somewhere() -> list[Any]:
+    return [tool_call("browser_click", selector="#other")]
+
+
+def fill_with_readings(steps: list[list[Any]]) -> Snapshots:
+    model = Snapshots(*steps, ready())
+    asyncio.run(fill_form(Readings(), [], model, "m", "the brief"))  # type: ignore[arg-type]
+    return model
+
+
+def tool_answers(messages: list[dict[str, Any]]) -> list[str]:
+    return [message["content"] for message in messages if message["role"] == "tool"]
+
+
+def test_old_large_readings_are_cut_to_their_start_in_one_batch_and_the_latest_stay_whole(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "TRIM_READINGS", True)
+    held = apply_module.READINGS_WHOLE + apply_module.READINGS_BATCH
+    model = fill_with_readings([read_page()] * (held + 1))
+    # Up to the batch's size every reading is whole: nothing was changed.
+    assert all(len(answer) > apply_module.LARGE_READING for answer in tool_answers(model.seen[held]))
+    # One more, and all but the latest two are cut, to their start and a note, never to nothing.
+    after = tool_answers(model.seen[-1])
+    cut, kept = after[: -apply_module.READINGS_WHOLE], after[-apply_module.READINGS_WHOLE :]
+    assert len(cut) == held + 1 - apply_module.READINGS_WHOLE
+    for number, answer in enumerate(cut, 1):
+        whole = f"reading {number}: " + "x" * 4000
+        assert answer == whole[: apply_module.READING_HEAD] + apply_module.EARLIER_READING
+    assert kept == ["reading " + str(held) + ": " + "x" * 4000, "reading " + str(held + 1) + ": " + "x" * 4000]
+    assert "Read the page again" in apply_module.EARLIER_READING
+
+
+def test_the_history_changes_once_per_batch_and_never_under_the_latest_readings_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "TRIM_READINGS", True)
+    # The service reuses what is the same as the request before: a request whose earlier messages changed costs the whole again.
+    def changes(reads: int) -> int:
+        model = fill_with_readings([read_page()] * reads)
+        return sum(previous != now[: len(previous)] for previous, now in zip(model.seen, model.seen[1:], strict=False))
+
+    held = apply_module.READINGS_WHOLE + apply_module.READINGS_BATCH
+    assert changes(held) == 0
+    assert changes(held + 1) == 1
+    # After a cut only two are whole: it takes READINGS_BATCH + 1 more to cut again.
+    assert changes(held + apply_module.READINGS_BATCH + 1) == 1
+    assert changes(held + apply_module.READINGS_BATCH + 2) == 2
+
+
+def test_small_answers_the_brief_and_the_rules_are_never_cut(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "TRIM_READINGS", True)
+    held = apply_module.READINGS_WHOLE + apply_module.READINGS_BATCH
+    steps = [step for _ in range(held + 2) for step in (read_page(), click_somewhere())]
+    model = fill_with_readings(steps)
+    first, last = model.seen[0], model.seen[-1]
+    assert last[0] == first[0] and last[1] == first[1] and last[1]["content"] == "the brief"
+    answers = tool_answers(last)
+    # Eight readings: the batch cut five at the seventh, the latest three are whole. Every click's answer is as it was.
+    assert answers.count("ok") == held + 2
+    assert sum(apply_module.EARLIER_READING in answer for answer in answers) == held + 1 - apply_module.READINGS_WHOLE
+    assert sum(len(answer) > 4000 for answer in answers) == 3
+
+
+def test_the_cut_is_off_and_no_reading_is_changed() -> None:
+    assert apply_module.TRIM_READINGS is False
+    model = fill_with_readings([read_page()] * 12)
+    assert all(len(answer) > 4000 and apply_module.EARLIER_READING not in answer for answer in tool_answers(model.seen[-1]))
+
+
+class HoldsBack(ScriptedBrowser):
+    """A form whose own validation refuses the click while a required box is empty: the page stays as it was and says nothing in
+    its text; the boxes it wants are the page's :invalid ones, until one is typed into."""
+
+    def __init__(self, wants: list[str]) -> None:
+        super().__init__({"#send": SUBMIT}, page={"url": "https://u/apply", "text": "the form"})
+        self.wants = wants
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        if name == "browser_evaluate" and ":invalid" in (arguments or {}).get("expression", ""):
+            self.calls.append((name, arguments or {}))
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(text=json.dumps(self.wants))])
+        if name == "browser_type":
+            self.wants = []
+        if name == "browser_click" and not self.wants:
+            self.page = {"url": "https://u/thanks", "text": "Application received"}
+        return await super().call_tool(name, arguments)
+
+
+UNCHANGED = json.dumps({"outcome": "unknown", "evidence": "the page is as it was"})
+NAME_WANTED = ["Name (Please fill out this field)"]
+
+
+def test_a_form_the_page_refused_gets_one_more_turn_and_is_sent_when_the_model_fixes_it(tmp_path: Path) -> None:
+    browser = HoldsBack(NAME_WANTED)
+    model = ScriptedModel(ready(), UNCHANGED, [tool_call("browser_type", selector="#name", text="Ada")], ready(), VERIFIED)
+    outcome = run(model, browser, tmp_path / "proof.png")
+    assert outcome.status == "submitted" and outcome.reason == ""
+    assert browser.clicks() == ["#send", "#send"]
+    # The model was told which field, with the page's own words, in the brief of its second turn.
+    again = model.requests[2]["messages"][1]["content"]
+    assert "Name (Please fill out this field)" in again and again.startswith("The form: https://u/apply")
+
+
+def test_a_form_the_page_refuses_again_or_cannot_be_fixed_is_said_to_be_refused_or_blocked_by_name(tmp_path: Path) -> None:
+    browser = HoldsBack(NAME_WANTED)
+    blocked = [tool_call("finish_form", status="blocked", blocked_by="missing_info", summary="Name asks for a signature I have no right to give")]
+    outcome = run(ScriptedModel(ready(), UNCHANGED, blocked), browser, tmp_path / "proof.png")
+    assert (outcome.status, outcome.reason) == ("blocked", "missing_info") and "signature" in outcome.summary
+    assert browser.clicks() == ["#send"]
+    # Fixed by a model that types nothing: the same page refuses again, and the application says it was refused, with the field.
+    outcome = run(ScriptedModel(ready(), UNCHANGED, ready(), UNCHANGED), HoldsBack(NAME_WANTED), tmp_path / "proof.png")
+    assert (outcome.status, outcome.reason) == ("refused", "refused_by_form")
+    assert outcome.summary == "the form refused it: Name (Please fill out this field)" and outcome.steps == 2
+
+
+def test_a_page_that_moved_on_is_never_taken_for_a_refusal_and_never_sent_again(tmp_path: Path) -> None:
+    # Invalid boxes are still in the old form, but the page went elsewhere: that is "not confirmed", and no second turn.
+    browser = HoldsBack(NAME_WANTED)
+    browser.page = {"url": "https://u/apply", "text": "the form"}
+
+    async def moves(name: str, arguments: dict[str, Any] | None = None) -> Any:
+        result = await HoldsBack.call_tool(browser, name, arguments)
+        if name == "browser_click":
+            browser.page = {"url": "https://u/somewhere", "text": "Working on it"}
+        return result
+
+    browser.call_tool = moves  # type: ignore[method-assign]
+    outcome = run(ScriptedModel(ready(), UNCHANGED), browser, tmp_path / "proof.png")
+    assert outcome.status == "unconfirmed" and browser.clicks() == ["#send"]

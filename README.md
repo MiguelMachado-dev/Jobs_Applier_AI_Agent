@@ -9,7 +9,8 @@
 </picture>
 <h3 align="center">An AI job application bot: automated job search, then it auto-applies to the jobs that match your resume, while you sleep.</h3>
 
-<a href="#the-count"><img alt="Applications sent with AIHawk, by all its users" src="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/badges/docs/badges/applications.svg"></a>
+<a href="https://decodo.com/deals/residential-offer?utm_medium=affiliate&utm_source=Federico+Elia&promoter_id=15854270&fpr=7859773"><img alt="Decodo residential proxies, free trial (sponsored)" src="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/decodo-residential-proxies-trial.png" width="560"></a><br>
+<sub>Sponsored</sub>
 
 <sub>FEATURED IN</sub><br>
 <a href="https://www.businessinsider.com/aihawk-applies-jobs-for-you-linkedin-risks-inaccuracies-mistakes-2024-11"><b>Business Insider</b></a> ·
@@ -30,40 +31,49 @@ Give it your resume. The job search finds the postings that fit, you pick, and i
 | Step | What happens |
 |---|---|
 | **1. Reads your resume** | Turns it into a search: the titles, the skills and the places that fit you. |
-| **2. Searches** | 10 million postings from 37 public sources, rebuilt every five hours, searched on your computer. |
+| **2. Searches** | Millions of postings of the last 30 days from 37 public sources, rebuilt every five hours, searched on your computer. |
 | **3. Scores** | Asks of every posting, against your resume, one question: is it in line with you? How sure the answer is makes the score, from 1 to 5. 50 jobs to a page, the next one ready while you read this one. |
 | **4. You pick** | Select the jobs you want and say yes once. |
-| **5. Applies** | A real Firefox opens the company's form, fills every required field, attaches your CV and sends. |
+| **5. Applies** | First a quick check that the posting is still open, on the sites where that can be told without a browser. Then a real Firefox opens the company's form, fills every required field, attaches your CV and sends. |
 | **6. Keeps the answer** | What each page said, with a screenshot, for every application. |
 
 ---
 
 ## Install
 
-This fork runs from its own folder, with your OpenAI key ([create one](https://platform.openai.com/api-keys)):
+This fork runs on OpenAI, with your OpenAI key ([create one](https://platform.openai.com/api-keys)). The account needs credit.
 
-```bash
-export OPENAI_API_KEY=sk-...
-./run.sh
-```
-
-On Windows, in PowerShell (macOS has no build of the browser, so forms cannot be filled there):
+Windows, in PowerShell:
 
 ```powershell
 $env:OPENAI_API_KEY = "sk-..."
 irm https://raw.githubusercontent.com/MiguelMachado-dev/Jobs_Applier_AI_Agent/openai/run.ps1 | iex
 ```
 
+Linux, and macOS (on a Mac AIHawk finds and scores the jobs, but cannot send applications yet: its browser has no Mac version), from this folder:
+
+```bash
+export OPENAI_API_KEY=sk-...
+./run.sh
+```
+
 Set `AIHAWK_DRY_RUN=1` (in PowerShell, `$env:AIHAWK_DRY_RUN = "1"`) to fill forms without sending them.
 
-## The count
+The first start downloads about 250 MB and takes a minute or two; after that it opens in seconds, also without a connection. Nothing else needs installing first (on Linux, `curl`). The first application brings the browser, about 430 MB more, and opens it in a window: on Linux that needs a desktop.
 
-Each application AIHawk finishes downloads one small file from GitHub, named after how it went: sent and confirmed, sent without a confirmation, refused by the form, blocked, or failed. GitHub counts the downloads, and that is how we know how many applications AIHawk sends; the number is the badge above. Nothing about you or the job goes with it: the file is the same for everyone. The count is always on.
+## Guides
 
+Written by the AIHawk team:
+
+- [How to auto-apply to jobs](https://autoapplytools.com/how-to-auto-apply-to-jobs/): what auto-apply tools do, and what to check before you let one send applications.
+- [How to apply for jobs, step by step](https://jobhuntlab.com/how-to-apply-for-jobs/): from reading a posting to following up.
+- [ATS-friendly resume template](https://atsresumeguide.com/ats-resume-template/): a plain resume layout that application systems read cleanly.
+- [How to write a cover letter](https://coverletterdesk.com/how-to-write-a-cover-letter/): structure, length and what to include.
+- [How to keep track of job applications](https://trackyourjobsearch.com/how-to-track-job-applications/): what to log for each application, so you know what was sent and when to follow up.
 
 ---
 
-[Sites](docs/sites.md) · [Configuration](docs/configuration.md) · [Writing a plugin](docs/plugins.md) · [Wiki](https://github.com/feder-cr/Jobs_Applier_AI_Agent/wiki) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
+[Sites](docs/sites.md) · [Configuration](docs/configuration.md) · [Writing a plugin](docs/plugins.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=feder-cr/Jobs_Applier_AI_Agent&type=Date&theme=dark">

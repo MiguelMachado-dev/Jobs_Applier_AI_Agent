@@ -10,8 +10,9 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
+from aihawk import errors
 from aihawk.database import Job
-from aihawk.llm import explain, refused, structured
+from aihawk.llm import account_problem, not_answering, refused, structured
 
 DESCRIPTION_CHARS = 6000
 # One posting to a request, so a verdict cannot land on another posting. Requests at once, for a round of postings in well under a minute; the client retries what a rate limit refuses.
@@ -24,6 +25,19 @@ with the candidate, as the question defines it. A job that is clearly not in lin
 
 # Named for the probability of a yes: a field called certainty came back as 1 for a sure no, 5 times in 216.
 VERDICT_SCHEMA: dict[str, Any] = {"type": "object", "additionalProperties": False, "required": ["fit_probability"], "properties": {"fit_probability": {"type": "number"}}}
+
+
+class NotJudged:
+    """What a posting's value is when the request about it got no answer: not that the model had none for it. It is asked
+    about again; a posting the model gave no verdict for (None) is set aside."""
+
+
+NOT_JUDGED = NotJudged()
+Value = float | None | NotJudged
+
+
+class NotAnswering(Exception):
+    """A round's request got no answer, so its postings were left to be read again."""
 
 
 def question(goals: str, places: str) -> str:
@@ -39,37 +53,35 @@ def score(certainty: float) -> float:
     return round(1 + 4 * min(1.0, max(0.0, certainty)), 1)
 
 
-async def fits(
-    client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked: str, progress: Callable[[int], None], why: Callable[[str], None]
-) -> list[float | None]:
-    """How sure the model is that each posting is in line, in order; None where it gave no answer. `progress` is told the
-    postings done so far. `why` is told, once per failed request, in plain words why."""
-    done = 0
+async def fits(client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked: str, why: Callable[[str], None]) -> list[Value]:
+    """How sure the model is that each posting is in line, in order; None where it gave no verdict, NOT_JUDGED where the request
+    got no answer at all. CONCURRENT requests at once. `why` is told, once per request that cannot work as it is, in plain words why."""
     gate = asyncio.Semaphore(CONCURRENT)
 
-    async def read(job: Job) -> float | None:
-        nonlocal done
+    async def read(job: Job) -> Value:
         async with gate:
-            value = await _read(client, model, cv, job, asked, why)
-        done += 1
-        progress(done)
-        return value
+            return await _read(client, model, cv, job, asked, why)
 
     return list(await asyncio.gather(*(read(job) for job in jobs)))
 
 
-async def _read(client: AsyncOpenAI, model: str, cv: str, job: Job, asked: str, why: Callable[[str], None]) -> float | None:
-    """One posting's value. A failure leaves it without a verdict, and `why` says why; a refused key is raised for the screen."""
+async def _read(client: AsyncOpenAI, model: str, cv: str, job: Job, asked: str, why: Callable[[str], None]) -> Value:
+    """One posting's value. A service that does not answer leaves it not judged. Any other failure leaves it without a verdict,
+    and `why` says why."""
     try:
         reply = await structured(client, model, VERDICT_SYSTEM, request_text(cv, job, asked), "posting_verdict", VERDICT_SCHEMA)
     except Exception as error:
-        if refused(error):
+        # A refused key, or an account with no credit, fails every request alike: it is raised for the screen, and no posting
+        # is set aside for it.
+        if refused(error) or account_problem(error):
             raise
-        why(explain(error))
+        if not_answering(error):
+            return NOT_JUDGED
+        why(errors.explained(error))
         return None
     value = _verdict(reply)
     if value is None:
-        why("The model's answer was not a number from 0 to 1")
+        why("The AI service left some out.")
     return value
 
 

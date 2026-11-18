@@ -140,11 +140,11 @@ def test_a_dry_run_sends_nothing_and_leaves_no_id(tmp_path: Path, tracked: list[
     assert tracked == [] and not (tmp_path / "install_id").exists()
 
 
-def test_a_request_that_fails_is_lost_and_nothing_else_happens(monkeypatch: pytest.MonkeyPatch) -> None:
-    def refuse(*_: Any, **__: Any) -> None:
-        raise OSError("no network")
+def test_this_fork_sends_no_event_anywhere(monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_network(*_: Any, **__: Any) -> None:
+        raise AssertionError("an event was sent")
 
-    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    monkeypatch.setattr(urllib.request, "urlopen", no_network)
     SENDING({"event": "app_started"})
 
 

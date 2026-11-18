@@ -1,4 +1,7 @@
-"""What AIHawk tells its makers about how it is used, for all its users together: to PostHog, anonymously.
+"""What upstream AIHawk tells its makers about how it is used, for all its users together: to PostHog, anonymously.
+
+This fork sends none of it: `send` drops every event, so nothing leaves the computer. The events are still made, as below,
+so the code and its tests stay as upstream has them and an upstream merge does not undo this.
 
 Each event carries an id made at random the first time AIHawk runs on a computer, so a person's events count once, and
 nothing about the person: no name, email, CV, answer, job, company, link, city or address. What goes, and EVENTS below is the
@@ -28,7 +31,6 @@ key is PostHog's write-only key, made to be public: it can send events and read 
 
 from __future__ import annotations
 
-import json
 import locale
 import os
 import platform
@@ -36,7 +38,6 @@ import re
 import sys
 import threading
 import time
-import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any
@@ -215,12 +216,5 @@ class Telemetry:
 
 
 def send(body: dict[str, Any]) -> None:
-    """The request, its answer read and dropped. An event that cannot be sent is lost, and nothing else happens."""
-    request = urllib.request.Request(
-        CAPTURE, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json", "User-Agent": "AIHawk"}
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            response.read()
-    except Exception:  # noqa: BLE001, S110  Telemetry must never stop or slow AIHawk.
-        pass
+    """Off in this fork: the event is dropped and nothing is sent to PostHog or anywhere else."""
+    return

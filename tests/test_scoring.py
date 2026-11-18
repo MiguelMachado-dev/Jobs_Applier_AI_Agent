@@ -62,7 +62,7 @@ def test_the_request_goes_to_chat_completions_with_the_key_the_question_and_a_st
     assert str(request.url) == "https://api.openai.com/v1/chat/completions"
     assert request.headers["authorization"] == "Bearer " + KEY
     body = json.loads(request.content)
-    assert body["model"] == DEFAULT_DECISION_MODEL
+    assert body["model"] == DEFAULT_DECISION_MODEL and body["reasoning_effort"] == "medium"
     schema = body["response_format"]["json_schema"]
     assert schema["strict"] is True
     assert schema["schema"] == {"type": "object", "additionalProperties": False, "required": ["fit_probability"], "properties": {"fit_probability": {"type": "number"}}}
@@ -160,7 +160,7 @@ def test_no_more_requests_than_the_limit_run_at_once() -> None:
 
 
 def test_the_decision_model_is_settable_in_the_settings(tmp_path: Path) -> None:
-    assert load_config(tmp_path).decision_model == "gpt-6.1-sol"
+    assert load_config(tmp_path).decision_model == "gpt-6.2-sol"
     (tmp_path / "aihawk.yaml").write_text("decision_model: other/model\n", encoding="utf-8")
     assert load_config(tmp_path).decision_model == "other/model"
 

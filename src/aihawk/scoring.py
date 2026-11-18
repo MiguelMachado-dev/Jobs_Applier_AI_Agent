@@ -11,6 +11,7 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from aihawk import errors
+from aihawk.config import DECISION_REASONING_EFFORT
 from aihawk.database import Job
 from aihawk.llm import account_problem, not_answering, refused, structured
 
@@ -87,7 +88,7 @@ async def _read(client: AsyncOpenAI, model: str, cv: str, job: Job, asked: str, 
     """One posting's value. A service that does not answer leaves it not judged. Any other failure leaves it without a verdict,
     and `why` says why."""
     try:
-        reply = await structured(client, model, VERDICT_SYSTEM, request_text(cv, job, asked), "posting_verdict", VERDICT_SCHEMA)
+        reply = await structured(client, model, VERDICT_SYSTEM, request_text(cv, job, asked), "posting_verdict", VERDICT_SCHEMA, DECISION_REASONING_EFFORT)
     except Exception as error:
         # A refused key, or an account with no credit, fails every request alike: it is raised for the screen, and no posting
         # is set aside for it.

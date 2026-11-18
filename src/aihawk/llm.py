@@ -22,8 +22,9 @@ from openai import (
 from aihawk.config import DEFAULT_BASE_URL, KEY_ENV, KEY_URL, REASONING_EFFORT, Config, ConfigError
 
 # OpenAI's /models gives no prices, so the default models' list prices per token: prompt, completion, cached prompt. From
-# its pricing page on 2026-11-10.
+# its pricing page on 2026-11-10, and gpt-6.2-sol's on 2026-11-18.
 PRICES = {
+    "gpt-6.2-sol": (2.00e-6, 10.00e-6, 0.10e-6),
     "gpt-6.1-sol": (2.00e-6, 10.00e-6, 0.10e-6),
     "gpt-5.4-mini": (0.75e-6, 4.50e-6, 0.075e-6),
     "gpt-5.4-nano": (0.20e-6, 1.25e-6, 0.02e-6),
@@ -150,7 +151,7 @@ class _Turn:
 
 
 async def act(client: AsyncOpenAI, model: str, messages: list[Any], tools: list[dict[str, Any]]) -> tuple[Any, str]:
-    """One turn of work with tools, as chat() returns it. GPT-6.1 Sol calls tools only through the Responses API, so the chat
+    """One turn of work with tools, as chat() returns it. GPT-6.x Sol calls tools only through the Responses API, so the chat
     messages go there and its answer comes back in the shape of a completion. A client without that API takes the chat one."""
     responses = getattr(client, "responses", None)
     if responses is None:
@@ -385,11 +386,14 @@ def make_client(config: Config) -> AsyncOpenAI:
     return AsyncOpenAI(base_url=DEFAULT_BASE_URL, api_key=key, max_retries=5, timeout=TIMEOUT)
 
 
-async def structured(client: AsyncOpenAI, model: str, system: str, user: str, name: str, schema: dict[str, Any]) -> dict[str, Any]:
-    """One answer that follows `schema`. A reply that is not that JSON raises: nothing is guessed from it."""
+async def structured(
+    client: AsyncOpenAI, model: str, system: str, user: str, name: str, schema: dict[str, Any], effort: str = REASONING_EFFORT
+) -> dict[str, Any]:
+    """One answer that follows `schema`, thought over at `effort`. A reply that is not that JSON raises: nothing is guessed from it."""
     response, request_id = await chat(
         client,
         model=model,
+        reasoning_effort=effort,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         response_format={"type": "json_schema", "json_schema": {"name": name, "strict": True, "schema": schema}},
     )

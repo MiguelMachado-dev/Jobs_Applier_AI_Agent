@@ -17,13 +17,15 @@ KEY_ENV = "OPENAI_API_KEY"
 # Where a person gets a key.
 KEY_URL = "https://platform.openai.com/api-keys"
 # Fills the forms and reads their screenshots.
-DEFAULT_MODEL = "gpt-6.1-sol"
+DEFAULT_MODEL = "gpt-6.2-sol"
 # For the plan and the other short calls of a search.
-DEFAULT_QUICK_MODEL = "gpt-6.1-sol"
+DEFAULT_QUICK_MODEL = "gpt-6.2-sol"
 # Answers, for each posting, whether it is in line with the candidate, and how sure it is: that is the posting's score.
-DEFAULT_DECISION_MODEL = "gpt-6.1-sol"
-# How hard every model call thinks. A model set in aihawk.yaml must accept this value.
+DEFAULT_DECISION_MODEL = "gpt-6.2-sol"
+# How hard the model calls think: the forms and the search plan at REASONING_EFFORT, the score of each posting, one call
+# per posting and most of the calls, at DECISION_REASONING_EFFORT. A model set in aihawk.yaml must accept its value.
 REASONING_EFFORT = "high"
+DECISION_REASONING_EFFORT = "medium"
 # The Hugging Face dataset the pipeline publishes to. It was GitHub's releases until 2026-11-08: see pipeline/publish.py.
 # Set in the environment, an application is a trial: the form is filled and the send control named, and nothing is sent, nor
 # counted. Read in one place, so what is sent and what is counted can never disagree about it.

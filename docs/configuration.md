@@ -10,7 +10,7 @@ With the environment variable `AIHAWK_DRY_RUN` set to anything, an application s
 
 ## What it costs
 
-AIHawk counts the tokens of every model call and prices them with OpenAI's list prices for the default models, kept in `PRICES` in `src/aihawk/llm.py`. The details of each application, on `s`, say what it cost. Every call runs at the reasoning effort in `REASONING_EFFORT` in `src/aihawk/config.py`, `high`. A model you set that is not in that list costs what OpenAI charges but is counted as unpriced: add it there.
+AIHawk counts the tokens of every model call and prices them with OpenAI's list prices for the default models, kept in `PRICES` in `src/aihawk/llm.py`. The details of each application, on `s`, say what it cost. The forms and the search plan run at the reasoning effort in `REASONING_EFFORT` in `src/aihawk/config.py`, `high`; the score of each posting at `DECISION_REASONING_EFFORT`, `medium`. A model you set that is not in that list costs what OpenAI charges but is counted as unpriced: add it there.
 
 ## The accounts it made
 
@@ -25,9 +25,9 @@ What the forms are told about you beyond the CV (email, phone, location, links, 
 | `goals` | empty | What you are looking for, in your own words. The model that scores the jobs reads it. |
 | `database` | `https://huggingface.co/datasets/feder-cr/jobs/resolve/main/library/manifest.json` | Where the job database is: the URL of its `manifest.json`, or the path of a local one. AIHawk downloads into `data/library` the chunks the search's days need, the newest jobs first; after that, only what changed. |
 | `max_age_days` | `15` | How many days back a search looks; "Posted within (days)" in Settings. AIHawk downloads only the part of the database these days need, all of it before the first search. The database holds the last 30 days, so a larger number finds nothing more. A posting its source does not date is dated by the day the database first saw it. |
-| `model` | `gpt-6.1-sol` | Fills the application forms, through the Responses API. Needs tools and images. |
-| `quick_model` | `gpt-6.1-sol` | Writes the search plan from your CV, and the other short calls of a search. |
-| `decision_model` | `gpt-6.1-sol` | Answers for each posting whether it is in line with you; how sure it is makes the score, from 1 to 5. |
+| `model` | `gpt-6.2-sol` | Fills the application forms, through the Responses API. Needs tools and images. |
+| `quick_model` | `gpt-6.2-sol` | Writes the search plan from your CV, and the other short calls of a search. |
+| `decision_model` | `gpt-6.2-sol` | Answers for each posting whether it is in line with you; how sure it is makes the score, from 1 to 5. |
 | `filters.include` | empty | Title words to search for. With no `plan`, each word is one title. AIHawk asks for a resume until there is a CV and at least one of these. Reading a resume writes this and `plan`, and the Settings screen does not offer them: a different search comes from a different resume. |
 | `filters.exclude` | empty | Whole words: a posting whose title has one of them is left out. |
 | `filters.locations` | empty | Places a posting's location must name, as whole words. |

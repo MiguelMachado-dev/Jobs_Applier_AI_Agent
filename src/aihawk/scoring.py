@@ -55,14 +55,32 @@ def score(certainty: float) -> float:
 
 async def fits(client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked: str, why: Callable[[str], None]) -> list[Value]:
     """How sure the model is that each posting is in line, in order; None where it gave no verdict, NOT_JUDGED where the request
-    got no answer at all. CONCURRENT requests at once. `why` is told, once per request that cannot work as it is, in plain words why."""
+    got no answer at all. CONCURRENT requests at once. `why` is told, once per request that cannot work as it is, in plain words why.
+    A refused key or account ends the round at its first refusal: the requests not yet answered are cancelled, as every one of
+    them would be refused alike."""
     gate = asyncio.Semaphore(CONCURRENT)
+    refused_once = False
 
     async def read(job: Job) -> Value:
+        nonlocal refused_once
         async with gate:
-            return await _read(client, model, cv, job, asked, why)
+            if refused_once:
+                # The round is over: this posting is left for the next one, and the refusal is what the round raises.
+                return NOT_JUDGED
+            try:
+                return await _read(client, model, cv, job, asked, why)
+            except Exception:
+                refused_once = True
+                raise
 
-    return list(await asyncio.gather(*(read(job) for job in jobs)))
+    tasks = [asyncio.ensure_future(read(job)) for job in jobs]
+    try:
+        return list(await asyncio.gather(*tasks))
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
 
 async def _read(client: AsyncOpenAI, model: str, cv: str, job: Job, asked: str, why: Callable[[str], None]) -> Value:

@@ -209,5 +209,46 @@ def test_an_account_with_no_credit_is_told_in_plain_words_and_what_to_do() -> No
     request = httpx.Request("POST", "https://x.example")
     paid = "Your OpenAI account has no credit left. Add some at platform.openai.com/settings/organization/billing, then press → to go on."
     assert explain(APIStatusError("Error code: 402", response=httpx.Response(402, request=request), body=None)) == paid
-    quota = RateLimitError("Error code: 429", response=httpx.Response(429, request=request), body={"code": "insufficient_quota", "message": "quota"})
+    quota = RateLimitError("Error code: 429", response=httpx.Response(429, request=request), body={"code": "credit_balance_exhausted", "message": "quota"})
     assert explain(quota) == paid
+
+
+def test_a_refused_account_ends_the_round_at_once_and_the_requests_not_yet_made_are_not_made() -> None:
+    from openai import RateLimitError
+
+    seen: list[httpx.Request] = []
+    body = {"error": {"message": "Your organization has no prepaid credits remaining.", "type": "insufficient_quota", "code": "credit_balance_exhausted"}}
+
+    def broke(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(429, json=body)
+
+    client = AsyncOpenAI(base_url=DEFAULT_BASE_URL, api_key=KEY, max_retries=0, http_client=httpx.AsyncClient(transport=httpx.MockTransport(broke)))
+    with pytest.raises(RateLimitError):
+        run(client, postings(CONCURRENT * 5))
+    # The ones already under way when the first refusal came may finish; the rest of the round is never asked.
+    assert len(seen) <= CONCURRENT
+
+
+@pytest.mark.parametrize(
+    ("code", "kind", "named"),
+    [
+        ("credit_balance_exhausted", "insufficient_quota", "no_credit"),
+        ("insufficient_quota", "insufficient_quota", "no_credit"),
+        ("", "insufficient_quota", "no_credit"),
+        ("organization_spend_limit_exceeded", "insufficient_quota", "spend_limit"),
+        ("project_spend_limit_exceeded", "insufficient_quota", "spend_limit"),
+        ("organization_usage_limit_exceeded", "insufficient_quota", "budget"),
+        ("slow_down", "rate_limit_error", ""),
+        ("rate_limit_exceeded", "requests", ""),
+    ],
+)
+def test_openais_429s_about_money_are_about_the_account_and_the_others_a_busy_service(code: str, kind: str, named: str) -> None:
+    from openai import RateLimitError
+
+    from aihawk.llm import account_problem, cause, no_credit, not_answering
+
+    error = RateLimitError("Error code: 429", response=httpx.Response(429, request=httpx.Request("POST", "https://x.example")), body={"error": {"message": "m", "type": kind, "code": code}})
+    assert cause(error) == named
+    assert account_problem(error) is bool(named) and not_answering(error) is not bool(named)
+    assert no_credit(error) is (named == "no_credit")

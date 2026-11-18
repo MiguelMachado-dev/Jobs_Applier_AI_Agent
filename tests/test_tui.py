@@ -2311,7 +2311,7 @@ def test_with_no_credit_the_jobs_stay_new_scoring_stops_and_says_what_to_do_and_
         app.session._client = model  # type: ignore[assignment]
         async with app.run_test(size=(80, 24)) as pilot:
             await settle(pilot, app)
-            assert model.attempts == 3, "one request per posting, not retried in a loop"
+            assert model.attempts == 1, "not retried in a loop"
             assert last_line(app) == "Your OpenAI account has no credit left. Add some at platform.openai.com/settings/organization/billing, then press → to go on."
             assert len(app.session.store.with_status("new")) == 3 and not app.session.store.with_status("passed_over")
             # The line is not covered by the count of the jobs coming, and nothing says there are no more.
@@ -2885,7 +2885,7 @@ def test_scoring_stopped_by_a_key_limit_says_the_cause(home: Path, resume: Path)
         async with app.run_test(size=(80, 24)) as pilot:
             await settle(pilot, app)
             assert last_line(app) == f"This key's own limit is used up. Raise it, or make a new key, at platform.openai.com/settings/organization/limits. Then {GO_ON}"
-            assert model.attempts == 3  # one request per posting, none asked again
+            assert model.attempts == 1
 
     asyncio.run(run())
 

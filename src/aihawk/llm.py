@@ -207,18 +207,40 @@ def refused(error: BaseException) -> bool:
     return isinstance(error, AuthenticationError)
 
 
-# OpenAI's code for an account with no credit left. It comes with a 429, the status of a rate limit, which waiting does not mend.
+# OpenAI answers an account out of credit, or over a spend or usage limit, with a 429, the status of a rate limit, which waiting
+# does not mend. Its error-codes page (read 2026-11-18) tells them apart by `code`; each can also come with the type, or an older
+# code, insufficient_quota, which is taken as no credit.
 NO_QUOTA = "insufficient_quota"
+QUOTA_CAUSES = {
+    "credit_balance_exhausted": "no_credit",
+    NO_QUOTA: "no_credit",
+    "organization_spend_limit_exceeded": "spend_limit",
+    "project_spend_limit_exceeded": "spend_limit",
+    "organization_usage_limit_exceeded": "budget",
+}
+
+
+def _quota_cause(error: BaseException) -> str:
+    """The cause of a 429 that is about the account's money, not its pace; empty for any other error."""
+    if not isinstance(error, RateLimitError):
+        return ""
+    code, _ = reply(error)
+    if code in QUOTA_CAUSES:
+        return QUOTA_CAUSES[code]
+    body = getattr(error, "body", None)
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        body = body["error"]
+    return "no_credit" if isinstance(body, dict) and body.get("type") == NO_QUOTA else ""
 
 
 def _out_of_quota(error: BaseException) -> bool:
-    return isinstance(error, RateLimitError) and reply(error)[0] == NO_QUOTA
+    return bool(_quota_cause(error))
 
 
 def not_answering(error: BaseException) -> bool:
     """Whether the service failed to answer, not that it answered no: no connection, too slow, too busy, or broken on its side.
     The same request can work a moment later, so the postings in it are asked about again, not set aside. An account out of
-    credit is not one of these, though OpenAI answers it with a 429."""
+    credit or over a limit is not one of these, though OpenAI answers it with a 429."""
     if _out_of_quota(error):
         return False
     if isinstance(error, APIConnectionError | RateLimitError):
@@ -234,8 +256,8 @@ def account_problem(error: BaseException) -> bool:
 
 
 def no_credit(error: BaseException) -> bool:
-    """Whether the account has no credit: OpenAI answers 429 insufficient_quota, another gateway 402."""
-    return _out_of_quota(error) or (isinstance(error, APIStatusError) and error.status_code == 402)
+    """Whether the account has no credit: OpenAI answers 429 credit_balance_exhausted, another gateway 402."""
+    return _quota_cause(error) == "no_credit" or (isinstance(error, APIStatusError) and error.status_code == 402)
 
 
 # The end of a gateway's message that names the request for its support and tells a person nothing.
@@ -270,14 +292,14 @@ ACCOUNT_CAUSES = frozenset({"no_credit", "free_calls_used", "key_limit", "spend_
 
 
 def cause(error: BaseException) -> str:
-    """Why the service refused for the account, as a short name; empty when the error is not about the account. OpenAI's 429
-    insufficient_quota, or a 402, is no credit; a 404 is a model the key cannot use; 403 has several causes that topping up
-    does not mend, each told apart by the code the service gives or, for some, only by its message."""
+    """Why the service refused for the account, as a short name; empty when the error is not about the account. OpenAI's 429s
+    about money are in QUOTA_CAUSES, a 402 is no credit; a 404 is a model the key cannot use; 403 has several causes that
+    topping up does not mend, each told apart by the code the service gives or, for some, only by its message."""
     if not isinstance(error, APIStatusError):
         return ""
     code, message = reply(error)
-    if _out_of_quota(error):
-        return "no_credit"
+    if quota := _quota_cause(error):
+        return quota
     if error.status_code == 402:
         return "free_calls_used" if code == "free_quota_exhausted" else "no_credit"
     if error.status_code == 404:
